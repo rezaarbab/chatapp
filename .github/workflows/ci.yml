@@ -72,7 +72,7 @@ jobs:
       - name: Run Tink→WebCrypto interop tests in workerd (miniflare)
         working-directory: backend/worker
         run: |
-          npm install --no-fund --no-audit
+          npm install --no-fund --no-audit > npm-install.log 2>&1 || { tail -n 25 npm-install.log; exit 1; }
           npx vitest run --reporter=verbose 2>&1 | tee interop-test.log
       - name: Emit failure diagnostics as annotations
         if: failure()
@@ -88,8 +88,12 @@ jobs:
             echo "::error::android-test.log missing (emulator boot or action-level failure)"
           fi
           if [ -f backend/worker/interop-test.log ]; then
-            grep -E "FAIL|✗|×|AssertionError|Error:" backend/worker/interop-test.log | head -n 6 | while IFS= read -r l; do echo "::error::VITEST: $(printf '%.320s' "$l")"; done
+            grep -E "FAIL|✗|×|AssertionError|Error:|failed" backend/worker/interop-test.log | head -n 6 | while IFS= read -r l; do echo "::error::VITEST: $(printf '%.320s' "$l")"; done
             tail -n 12 backend/worker/interop-test.log | while IFS= read -r l; do echo "::error::VT: $(printf '%.320s' "$l")"; done
+          elif [ -f backend/worker/npm-install.log ]; then
+            tail -n 15 backend/worker/npm-install.log | while IFS= read -r l; do echo "::error::NPM: $(printf '%.320s' "$l")"; done
+          else
+            echo "::error::no interop-test.log and no npm-install.log (npm install never started)"
           fi
       - name: Failure diagnostics into step summary
         if: always()
