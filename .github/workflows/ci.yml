@@ -76,11 +76,16 @@ jobs:
         if: failure()
         run: |
           if [ -f android-test.log ]; then
-            sudo dmesg 2>/dev/null | grep -iE "oom|killed process|out of memory" | tail -n 5 | while IFS= read -r l; do echo "::error::DMESG: $(printf '%.320s' "$l")"; done
-            free -h 2>&1 | while IFS= read -r l; do echo "::error::MEM: $l"; done
-            df -h / 2>&1 | while IFS= read -r l; do echo "::error::DISK: $l"; done
-            total=$(wc -l < android-test.log); start=$((total > 12 ? total - 12 : 1))
-            sed -n "${start},${total}p" android-test.log | while IFS= read -r l; do echo "::error::TAIL: $(printf '%.320s' "$l")"; done
+            line=$(grep -n "What went wrong" android-test.log | head -1 | cut -d: -f1)
+            if [ -n "$line" ]; then
+              sed -n "${line},$((line+8))p" android-test.log | while IFS= read -r l; do echo "::error::WWW: $(printf '%.320s' "$l")"; done
+            else
+              tail -n 8 android-test.log | while IFS= read -r l; do echo "::error::TAIL: $(printf '%.320s' "$l")"; done
+            fi
+            xml=$(find android/build/outputs/androidTest-results -name "*.xml" 2>/dev/null | head -1)
+            if [ -n "$xml" ]; then
+              grep -oE '<testcase name="[^"]{0,100}"|<failure message="[^"]{0,300}' "$xml" | head -n 5 | while IFS= read -r l; do echo "::error::XML: $(printf '%.320s' "$l")"; done
+            fi
           else
             echo "::error::android-test.log missing (emulator boot or action-level failure)"
           fi
