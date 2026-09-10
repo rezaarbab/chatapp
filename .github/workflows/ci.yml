@@ -60,6 +60,9 @@ jobs:
           if [ -f android-test.log ]; then
             grep -E "^e: file:|^FAILURE: |^Execution failed for task|Caused by:|What went wrong|FAILED" android-test.log | head -n 25 | while IFS= read -r line; do echo "::error::${line:0:500}"; done || true
           fi
+          find android/build/outputs/androidTest-results -name "*.xml" 2>/dev/null | while IFS= read -r f; do
+            grep -A4 "<failure" "$f" | head -n 24 | while IFS= read -r line; do echo "::error::${line:0:480}"; done || true
+          done
           if [ -f backend/worker/interop-test.log ]; then
             grep -E "FAIL|Error:|AssertionError|✗|×" backend/worker/interop-test.log | head -n 25 | while IFS= read -r line; do echo "::error::${line:0:500}"; done || true
           fi
