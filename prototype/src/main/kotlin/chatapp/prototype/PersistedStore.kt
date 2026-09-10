@@ -6,6 +6,8 @@ import org.signal.libsignal.protocol.InvalidKeyIdException
 import org.signal.libsignal.protocol.NoSessionException
 import org.signal.libsignal.protocol.ReusedBaseKeyException
 import org.signal.libsignal.protocol.SignalProtocolAddress
+import org.signal.libsignal.protocol.groups.state.SenderKeyRecord
+import org.signal.libsignal.protocol.groups.state.SenderKeyStore
 import org.signal.libsignal.protocol.state.IdentityKeyStore
 import org.signal.libsignal.protocol.state.KyberPreKeyRecord
 import org.signal.libsignal.protocol.state.KyberPreKeyStore
@@ -13,9 +15,11 @@ import org.signal.libsignal.protocol.state.PreKeyRecord
 import org.signal.libsignal.protocol.state.PreKeyStore
 import org.signal.libsignal.protocol.state.SessionRecord
 import org.signal.libsignal.protocol.state.SessionStore
+import org.signal.libsignal.protocol.state.SignalProtocolStore
 import org.signal.libsignal.protocol.state.SignedPreKeyRecord
 import org.signal.libsignal.protocol.state.SignedPreKeyStore
 import java.security.SecureRandom
+import java.util.UUID
 
 /**
  * In-memory simulation of the future Room database. Every libsignal record is held
@@ -33,12 +37,12 @@ class DeviceDatabase(val deviceLabel: String) {
     val signedPreKeys = mutableMapOf<Int, ByteArray>()
     val kyberPreKeys = mutableMapOf<Int, ByteArray>()
     val kyberUsedTuples = mutableSetOf<String>()
+    val senderKeys = mutableMapOf<String, ByteArray>()
 
     fun sessionKey(name: String, deviceId: Int) = "$name:$deviceId"
 }
 
-class PersistedStore(private val db: DeviceDatabase) :
-    SessionStore, PreKeyStore, SignedPreKeyStore, KyberPreKeyStore, IdentityKeyStore {
+class PersistedStore(private val db: DeviceDatabase) : SignalProtocolStore {
 
     companion object {
         fun createFresh(deviceLabel: String): Pair<DeviceDatabase, PersistedStore> {
@@ -91,7 +95,7 @@ class PersistedStore(private val db: DeviceDatabase) :
     override fun loadExistingSessions(addresses: MutableList<SignalProtocolAddress>): MutableList<SessionRecord> {
         return addresses.map { address ->
             val bytes = db.sessions[db.sessionKey(address.name, address.deviceId)]
-                ?: throw NoSessionException(address)
+                ?: throw NoSessionException(address, "no active session for ${address.name}.${address.deviceId}")
             SessionRecord(bytes)
         }.toMutableList()
     }
@@ -186,4 +190,23 @@ class PersistedStore(private val db: DeviceDatabase) :
         // One-time semantics: consume (remove) the kyber prekey after use.
         db.kyberPreKeys.remove(kyberPreKeyId)
     }
+
+    // ---- SenderKeyStore (required by SignalProtocolStore; groups are out of MVP scope) ----
+
+    private fun senderKeyKey(sender: SignalProtocolAddress, distributionId: UUID) =
+        "${sender.name}:${sender.deviceId}:$distributionId"
+
+    override fun storeSenderKey(
+        sender: SignalProtocolAddress,
+        distributionId: UUID,
+        record: SenderKeyRecord,
+    ) {
+        db.senderKeys[senderKeyKey(sender, distributionId)] = record.serialize()
+    }
+
+    override fun loadSenderKey(
+        sender: SignalProtocolAddress,
+        distributionId: UUID,
+    ): SenderKeyRecord? =
+        db.senderKeys[senderKeyKey(sender, distributionId)]?.let { SenderKeyRecord(it) }
 }

@@ -8,6 +8,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.assertThrows
 import org.signal.libsignal.protocol.DuplicateMessageException
 import org.signal.libsignal.protocol.IdentityKeyPair
+import org.signal.libsignal.protocol.ReusedBaseKeyException
 import org.signal.libsignal.protocol.SessionBuilder
 import org.signal.libsignal.protocol.SessionCipher
 import org.signal.libsignal.protocol.SignalProtocolAddress
@@ -21,7 +22,6 @@ import org.signal.libsignal.protocol.message.SignalMessage
 import org.signal.libsignal.protocol.state.PreKeyBundle
 import org.signal.libsignal.protocol.state.PreKeyRecord
 import org.signal.libsignal.protocol.state.SignedPreKeyRecord
-import org.signal.libsignal.protocol.state.ReusedBaseKeyException
 import org.signal.libsignal.protocol.state.KyberPreKeyRecord
 
 /**
@@ -96,10 +96,8 @@ class CryptoPrototypeTest {
         val original = store.identityKeyPair
         val restored = IdentityKeyPair(original.serialize())
         assertArrayEquals(original.publicKey.serialize(), restored.publicKey.serialize())
-        assertArrayEquals(
-            original.privateKey.calculateSignature("msg".toByteArray()),
-            restored.privateKey.calculateSignature("msg".toByteArray()),
-        )
+        // ECDSA signatures are randomized; compare private key material instead.
+        assertArrayEquals(original.privateKey.serialize(), restored.privateKey.serialize())
         assertTrue(store.localRegistrationId in 1..16380)
     }
 
@@ -134,14 +132,18 @@ class CryptoPrototypeTest {
         alice.builderFor(bob).process(bob.buildBundle(oneTimeEc = bob.storeOneTimeEcPreKey(201)))
 
         val m1 = alice.cipherFor(bob).encrypt("one".toByteArray())
+        assertEquals(CiphertextMessage.PREKEY_TYPE, m1.type)
         bob.cipherFor(alice).decrypt(PreKeySignalMessage(m1.serialize()))
 
+        // The receiver holds an established session, so its first reply is a whisper message.
+        val reply = bob.cipherFor(alice).encrypt("hi alice".toByteArray())
+        assertEquals(CiphertextMessage.WHISPER_TYPE, reply.type)
+        alice.cipherFor(bob).decrypt(SignalMessage(reply.serialize()))
+
+        // Once the sender has received a reply on the established session, its messages are whisper too.
         val m2 = alice.cipherFor(bob).encrypt("two".toByteArray())
         assertEquals(CiphertextMessage.WHISPER_TYPE, m2.type)
         assertEquals("two", String(bob.cipherFor(alice).decrypt(SignalMessage(m2.serialize()))))
-
-        val reply = bob.cipherFor(alice).encrypt("hi alice".toByteArray())
-        assertEquals("hi alice", String(alice.cipherFor(bob).decrypt(SignalMessage(reply.serialize()))))
     }
 
     @Test
@@ -169,6 +171,10 @@ class CryptoPrototypeTest {
         alice1.builderFor(bob1).process(bob1.buildBundle(oneTimeEc = bob1.storeOneTimeEcPreKey(203)))
         val sent = alice1.cipherFor(bob1).encrypt("before restart".toByteArray())
         bob1.cipherFor(alice1).decrypt(PreKeySignalMessage(sent.serialize()))
+
+        // Complete a round trip so Alice's session is acknowledged before the restart.
+        val ack = bob1.cipherFor(alice1).encrypt("ack".toByteArray())
+        alice1.cipherFor(bob1).decrypt(SignalMessage(ack.serialize()))
 
         // Simulate app restart: brand-new Java objects hydrated from the same persisted bytes.
         val aliceStore2 = PersistedStore(alice1.db)
