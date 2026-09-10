@@ -63,6 +63,8 @@ CREATE TABLE devices (
   -- dev_no = SignalProtocolAddress.deviceId. Range 1..127 is a libsignal constraint.
   -- NEVER reused, even after revocation (matches Signal semantics; avoids session collisions).
   identity_pub_key BLOB NOT NULL,               -- device-level identity (verified fact: each device has its own keypair)
+  auth_pub_key     BLOB NOT NULL,               -- Device Authentication public key (raw 32-byte Ed25519, see §13)
+  auth_key_alg     TEXT NOT NULL DEFAULT 'Ed25519',
   registration_id  INTEGER NOT NULL CHECK (registration_id BETWEEN 1 AND 16380),
   label            TEXT,
   created_at       INTEGER NOT NULL,
@@ -202,11 +204,15 @@ CREATE TABLE auth_challenges (
   challenge_id TEXT PRIMARY KEY,
   nonce        TEXT NOT NULL UNIQUE,    -- 256-bit random
   purpose      TEXT NOT NULL CHECK (purpose IN ('register','auth','add_device')),
+  -- challenge carries the full verification context so the verify step
+  -- never re-accepts client-supplied values (prevents context swap):
   account_id   TEXT,                    -- NULL for 'register'
   device_id    TEXT,                    -- NULL for 'register'/'add_device'
-  identity_pub BLOB,                    -- required for register/add_device (new device identity)
+  username     TEXT,                    -- register/add_device
+  identity_pub BLOB,                    -- register/add_device (libsignal identity, TOFU anchor)
+  auth_pub     BLOB,                    -- register/add_device (Device Authentication public key)
   issued_at    INTEGER NOT NULL,
-  expires_at   INTEGER NOT NULL,
+  expires_at   INTEGER NOT NULL,        -- 60 s
   used_at      INTEGER                  -- atomic single-use: UPDATE ... WHERE used_at IS NULL
 );
 
@@ -214,7 +220,7 @@ CREATE TABLE auth_tokens (
   token_hash TEXT PRIMARY KEY,          -- SHA-256(token); raw token never stored server-side
   device_id  TEXT NOT NULL REFERENCES devices(device_id),
   issued_at  INTEGER NOT NULL,
-  expires_at INTEGER NOT NULL,          -- short-lived, server-set
+  expires_at INTEGER NOT NULL,          -- 30 minutes
   revoked_at INTEGER
 );
 CREATE INDEX idx_tokens_device ON auth_tokens(device_id);
@@ -229,14 +235,14 @@ Signed data for challenges (canonical string, `\n`-joined):
   Signature produced by libsignal `ECPrivateKey.calculateSignature` (Curve25519 signature — verified
   in the Phase 0.5 prototype that this API exists and works).
 
-Server-side verification note: Workers WebCrypto cannot verify Curve25519
-signatures; adding that would be custom crypto. Therefore the Worker does NOT
-verify prekey signatures — libsignal verifies them on the receiving client
-during `SessionBuilder.process` (audited library path). Challenge signatures are
-verified **by construction**: the private key holder is the only one who can
-produce a key that later matches during E2EE identity binding; plus tokens are
-only issued after signature checks that *are* possible server-side — see §4
-open question Q3.
+Verification split (important):
+
+- **Challenge signatures (server auth):** Ed25519, verified server-side via
+  official WebCrypto (see §13/§14). No custom crypto.
+- **libsignal prekey signatures (Curve25519):** still verified **client-side**
+  by libsignal during `SessionBuilder.process` (audited library path). The
+  Worker never sees or verifies these — WebCrypto has no Curve25519-signature
+  support and implementing it would be custom crypto.
 
 ---
 
@@ -276,14 +282,21 @@ payloads minimal and removes duplicate-delivery logic.
 
 ## 4. Authentication & token lifecycle
 
-1. Client requests challenge (nonce = 256-bit random, TTL 5 min, single-use row).
-2. Client signs canonical string with device identity private key (libsignal API).
+**Superseded by §13 (Device Authentication Key). §13 is the approved direction;
+this section remains only for the message/token flow.**
+
+1. Client requests challenge (nonce = 256-bit random, TTL **60 s** (user-approved), single-use row).
+2. Client signs canonical context string with the **Device Authentication Key** (Ed25519 — see §13).
 3. Server atomically consumes challenge (`UPDATE ... WHERE used_at IS NULL`,
    check `meta.changes = 1`) → replay-proof.
-4. Server issues token: `token = 256-bit random`; stores only `SHA-256(token)`;
-   TTL 24 h; bound to device_id; revoked when device revoked.
-5. Every request: constant-time hash lookup → device row must be active
-   (`revoked_at IS NULL`) → updates `last_seen_at` (throttled).
+4. Server **verifies the signature via official WebCrypto Ed25519** (`crypto.subtle.verify`,
+   Secure Curves — verified supported in Workers, §14) against the `auth_pub_key`
+   registered for that device.
+5. Server issues token: `token = 256-bit random`; stores only `SHA-256(token)`;
+   TTL **30 minutes** (user-approved); bound to device_id; revoked when device revoked.
+   Comparisons use Workers `crypto.subtle.timingSafeEqual`.
+6. Every request: hash lookup → device row must be active (`revoked_at IS NULL`)
+   → updates `last_seen_at` (throttled).
 
 Device revocation: DELETE /devices → `revoked_at=now`, revoke all tokens,
 close WS (RealtimeHub enforces by checking device state on reconnect).
@@ -302,17 +315,16 @@ close WS (RealtimeHub enforces by checking device state on reconnect).
 - On notify: `stub.fetch()` from Worker after fan-out commit (fire-and-forget
   inside `ctx.waitUntil`).
 
-## 6. TTL & cleanup (server-owned)
-
-Proposed constants (require approval):
+## 6. TTL & cleanup (server-owned, user-approved values)
 
 | Object | TTL / policy |
 |---|---|
-| auth challenge | 5 minutes |
-| auth token | 24 hours |
-| message_queue row | 7 days |
-| attachment (R2 object + rows) | 7 days |
-| backups | latest per account, older versions 30 days |
+| auth challenge | **60 seconds** |
+| auth token (access) | **30 minutes** |
+| token refresh / re-auth | separate design (Phase 2 deliverable) |
+| message_queue row | **7 days** |
+| attachment | **min(7 days, all snapshot devices ACKed)** — delete when either condition is met |
+| backups | **deferred to Phase 7** (schema column kept, policy decided later) |
 | one-time prekeys low-water mark | client uploads when < 25 remain (server hint in bundle response) |
 
 Cleanup: **hourly Cron Trigger** (free tier: 5 crons/account, 15-min wall time —
@@ -404,13 +416,130 @@ exceeds R2 free tier.
 
 ## 12. Open questions for approval
 
-- **Q1 — TTLs:** accept the §6 table?
-- **Q2 — Username:** case-sensitive exact match OK?
-- **Q3 — Challenge signature verification:** Workers cannot verify Curve25519
-  signatures without custom crypto. Proposal: registration/add-device signatures
-  are verified **indirectly** (identity binding happens client-side at session
-  build, TOFU) and the server treats signatures as opaque. Alternative would be
-  custom Curve25519 sig verification in the Worker — violates the no-custom-crypto
-  rule. Accept the indirect model?
-- **Q4 — Framework-free Worker:** OK?
-- **Q5 — Push-as-signal WS design:** OK?
+- ~~Q1 TTLs~~ — **approved by user** (see §6).
+- ~~Q2 username~~ — **approved**: case-sensitive exact match.
+- ~~Q3 server-side signature verification~~ — **replaced**: user rejected the
+  TOFU-indirect model for *server authentication*; a dedicated Device
+  Authentication Key with server-side WebCrypto verification is now designed in §13.
+- ~~Q4 framework-free Worker~~ — **approved**.
+- ~~Q5 push-as-signal WS~~ — **approved**.
+- **Q6 (new, awaiting approval):** Device Authentication Key storage model —
+  §13.3 Option B (Ed25519/Tink, recommended) vs Option A (ECDSA P-256 in
+  AndroidKeyStore).
+
+---
+
+## 13. Device Authentication Key (user-directed redesign)
+
+Requirement: server-side, standard-algorithm, WebCrypto-verifiable device
+authentication **independent of the libsignal identity key**. No custom crypto
+primitives, signature formats, or verification code.
+
+### 13.1 Verified API facts (official docs, Sep 2026)
+
+| Fact | Source |
+|---|---|
+| Workers WebCrypto supports **Ed25519** fully: `sign`, `verify`, `generateKey`, `importKey`, `exportKey` (per WICG Secure Curves; raw 32-byte public keys, raw 64-byte signatures) | Workers WebCrypto docs, "Supported algorithms" table |
+| Workers WebCrypto supports **ECDSA** (P-256/P-384) fully; signatures in raw P1363 (r‖s) format per WebCrypto spec | same |
+| Workers has `crypto.subtle.timingSafeEqual` (constant-time compare) | same |
+| **AndroidKeyStore does NOT expose Ed25519** — official `KeyProperties` lists only RSA, EC, XDH, AES, 3DES, HMAC (AOSP source check) | AOSP `KeyProperties.java` |
+| AndroidKeyStore supports **EC keys with SIGN purpose** since API 23; output of `Signature("SHA256withECDSA")` is **DER-encoded** | AOSP / Android Keystore docs |
+| WebCrypto ECDSA `verify()` requires **raw P1363** signature format | W3C WebCrypto spec |
+| Google **Tink** provides standard, audited Ed25519 signatures (raw 64-byte output per RFC 8032) on all Android versions we target | Tink docs |
+
+### 13.2 Key inventory (single source of truth)
+
+| Key | Used for | Generated | Private key lives | Public key lives | Rotation | Revocation effect |
+|---|---|---|---|---|---|---|
+| **libsignal Identity Key** (per device) | E2EE identity: PQXDH/Double-Ratchet session establishment, TOFU pinning of *remote* identities, signing prekeys | libsignal `IdentityKeyPair.generate()` on device | SQLCipher DB (serialized bytes) | D1 `devices.identity_pub_key` + on other clients' identity stores | never (device identity; compromise = security reset / new device) | device revoke → server row marked; E2EE sessions of that device become irrelevant; remote clients see TOFU change |
+| **Device Authentication Key** (per device, NEW) | server authentication: sign challenges for register / auth / add_device → obtain access tokens. **Not used in E2EE.** | Ed25519 via Tink keyset generation (Option B) or AndroidKeyStore EC P-256 (Option A) | **Option B:** Tink keyset in SQLCipher DB. **Option A:** AndroidKeyStore, non-exportable | D1 `devices.auth_pub_key` (raw bytes) | no automatic rotation; explicit rotation ceremony only (§13.5) | revoke device → `revoked_at` set, all tokens for device revoked, auth key becomes unusable for token issuance (device row inactive) |
+| libsignal SignedPreKey / OneTimePreKeys / KyberPreKeys | E2EE session establishment | device, per libsignal lifecycle | SQLCipher DB (serialized) | D1 prekey tables (**public keys only**) | signed prekey rotated by client policy (≤ 30 days), one-time replenished < 25 | server rows deleted on revoke |
+| **Access token** | bearer auth for every API call | Worker (`crypto.getRandomValues`, 256-bit) | client: SQLCipher table (not plain prefs) | — (server stores `SHA-256(token)` only) | TTL 30 min; silent re-auth via auth-key challenge | revoked with device; hash row deleted on revoke/cleanup |
+| **SQLCipher passphrase / DEK** | encrypts the local DB (libsignal keys + auth keyset + tokens + file keys) | `SecureRandom` 32 bytes | **wrapped** by AndroidKeyStore AES-256-GCM key; wrapped blob in prefs; passphrase only ever in memory | — | not rotated (re-key = out of scope) | deleting Keystore key ⇒ DB permanently unreadable (anti-theft property) |
+| **Backup key** | encrypts encrypted backups | derived from recovery phrase (Phase 7 design; Argon2id/HKDF with domain separation) | derived on demand; never stored | — | recovery phrase change | n/a |
+
+### 13.3 Option B (recommended): Ed25519 via Tink
+
+- Algorithm: **Ed25519** (RFC 8032). Client signs; server verifies with official
+  WebCrypto. Signature = raw 64 bytes; public key = raw 32 bytes.
+  **Zero format conversion anywhere** — Tink output is byte-identical to what
+  `crypto.subtle.verify({name:'Ed25519'})` expects.
+- Private key: Tink keyset (standard, audited Google library) stored inside the
+  SQLCipher-encrypted DB — same protection tier as libsignal keys.
+- Trade-off (documented honestly): auth private key is *software-tier*
+  (extractable by root). This matches the project threat model, which already
+  excludes rooted/compromised devices from guarantees.
+- Works identically on every supported device (minSdk 26).
+
+### 13.4 Option A (alternative): ECDSA P-256 inside AndroidKeyStore
+
+- Private key non-exportable, hardware-backed where available (StrongBox opt-in).
+- BUT: Java Keystore outputs **DER** ECDSA signatures while WebCrypto `verify()`
+  requires **raw P1363** → a DER→P1363 converter is mandatory. This is a
+  deterministic, standards-defined byte re-format (RFC 5480 / SEC1 / WebCrypto
+  spec) — but it *is* extra code in the signature path, which the user's rules
+  flagged. Listed only for completeness.
+
+### 13.5 Binding & anti-substitution model
+
+Canonical challenge context (UTF-8, `\|`-joined, versioned):
+
+```
+v1|register   |challenge_id|nonce|username|b64(identity_pub)|b64(auth_pub)
+v1|auth       |challenge_id|nonce|account_id|device_id
+v1|add_device |challenge_id|nonce|username|b64(identity_pub)|b64(auth_pub)|authorizer_device_id
+```
+
+- **register:** client signs the context with its new Device Authentication
+  Key. Worker verifies with the `auth_pub` carried *inside the challenge row*
+  (challenge is created first; verify step reads context from the row, never
+  from the request). Possession proven; `auth_pub ↔ device row ↔ username`
+  bound. First registration is the trust root (no prior anchor exists);
+  username uniqueness + rate limits constrain attackers (documented).
+- **add_device:** requires **two** valid signatures over the same context:
+  (1) the new device's (unregistered) auth key, (2) an *active* registered
+  device of that account (the authorizer). Without an already-registered
+  account device, no attacker can add a device.
+- **auth (token issuance):** device signs its own challenge; Worker verifies
+  against `devices.auth_pub_key` of that exact device; device must be active.
+- **Rotation ceremony (no silent substitution):** changing `auth_pub_key`
+  requires a `rotate_auth_key` challenge signed by the *current* registered
+  auth key (or co-signed by another active device). Otherwise the column is
+  immutable.
+- **Replay/misuse:** challenge = single-use (atomic `used_at` flip, verified by
+  `meta.changes == 1`), TTL 60 s, purpose + identifiers embedded in the signed
+  context → cross-purpose or cross-device replay fails signature/lookup.
+- **TLS + signatures:** transport MITM cannot replay old signatures (nonce,
+  60 s expiry) nor forge new ones (Ed25519).
+
+### 13.6 Answers to the nine mandated questions (condensed)
+
+1. **libsignal Identity Key** → E2EE only (sessions, TOFU pinning, prekey signing). Never used for server auth.
+2. **Device Authentication Key** → server auth only (challenge signing → token issuance). Never used in E2EE.
+3. **Initial binding** → §13.5: possession proof via challenge signature at register/add_device; add_device additionally co-signed by an active registered device.
+4. **Public key server storage** → `devices.auth_pub_key` (D1), immutable except via rotation ceremony.
+5. **Private key storage** → Option B: Tink keyset inside SQLCipher DB; Option A: AndroidKeyStore non-exportable.
+6. **Inside SQLCipher** → libsignal identity/sessions/prekeys, Tink auth keyset (Option B), access tokens, cached attachment file keys (from E2EE envelopes).
+7. **Android Keystore protects** → (a) the AES-256-GCM key that wraps the SQLCipher passphrase (as already implemented and CI-tested); (b) with Option A, additionally the auth private key itself.
+8. **Lifecycle/rotation** → §13.2 table; auth key = explicit signed ceremony only; signed prekey ≤ 30 days; one-time replenish < 25; token TTL 30 min; identity never rotates.
+9. **Device revocation** → `revoked_at` set; token rows for the device revoked (and hourly-cron-deleted after expiry); WS closed by RealtimeHub on next touch; excluded from future fan-out snapshots; `auth_pub_key` row retained (dev_no never reused).
+
+---
+
+## 14. Workers WebCrypto usage in the auth path (no custom crypto)
+
+```ts
+// verify (server):
+const pub = await crypto.subtle.importKey(
+  "raw", authPubBytes, { name: "Ed25519" }, false, ["verify"]);
+const ok = await crypto.subtle.verify(
+  { name: "Ed25519" }, pub, signatureBytes, contextBytes);
+// token compare:
+crypto.subtle.timingSafeEqual(tokenHash, storedHash);
+// token hash:
+await crypto.subtle.digest("SHA-256", tokenBytes);
+```
+
+Client (Android, Option B): Tink `Signature` primitive `ED25519_SIGN` —
+64-byte raw signatures per RFC 8032 (verified compatible with the above).
+No DER, no P1363 conversion, no custom verification code.
