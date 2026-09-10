@@ -4,7 +4,6 @@ import android.util.Base64
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.google.crypto.tink.InsecureSecretKeyAccess
-import com.google.crypto.tink.KeyTemplates
 import com.google.crypto.tink.KeysetHandle
 import com.google.crypto.tink.RegistryConfiguration
 import com.google.crypto.tink.TinkProtoKeysetFormat
@@ -35,8 +34,10 @@ class AuthInteropInstrumentedTest {
     fun tinkSignsChallengeContextForWebCryptoVerification() {
         val context = InstrumentationRegistry.getInstrumentation().context
 
-        // 1. Ed25519 keypair via Tink (standard, audited).
-        val handle = KeysetHandle.generateFrom(KeyTemplates.get("ED25519"))
+        // 1. Ed25519 keypair via Tink (standard, audited) — Tink 1.23 builder API.
+        val handle = KeysetHandle.newBuilder()
+            .addEntry(KeysetHandle.generateEntryFromParametersName("ED25519"))
+            .build()
 
         // 2. Export the raw Ed25519 public key (32 bytes) from the keyset proto.
         val serialized = TinkProtoKeysetFormat.serializeKeyset(handle, InsecureSecretKeyAccess.get())
