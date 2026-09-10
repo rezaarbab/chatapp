@@ -34,8 +34,9 @@ kotlin {
 dependencies {
     // Official Signal Android artifact (contains Android .so natives)
     implementation("org.signal:libsignal-android:0.102.1")
-    // SQLCipher Community edition (latest on Maven Central as of 2026-09)
-    implementation("net.zetetic:sqlcipher-android:4.19.0")
+    // SQLCipher Community edition. 4.17.0 is the newest release whose AAR metadata
+    // (minCompileSdk=1) is compatible with compileSdk 35; 4.18+ requires compileSdk 37.
+    implementation("net.zetetic:sqlcipher-android:4.17.0")
     // Required: sqlcipher-android's SQLiteDatabase exposes androidx.sqlite.db supertypes
     implementation("androidx.sqlite:sqlite:2.7.0")
 
