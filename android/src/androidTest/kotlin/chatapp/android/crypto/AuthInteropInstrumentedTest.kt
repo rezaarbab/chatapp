@@ -5,13 +5,12 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.google.crypto.tink.InsecureSecretKeyAccess
 import com.google.crypto.tink.KeysetHandle
-import com.google.crypto.tink.RegistryConfiguration
 import com.google.crypto.tink.TinkProtoKeysetFormat
-import com.google.crypto.tink.PublicKeySign
-import com.google.crypto.tink.PublicKeyVerify
 import com.google.crypto.tink.proto.Ed25519PrivateKey
 import com.google.crypto.tink.proto.Keyset
 import com.google.crypto.tink.signature.Ed25519Parameters
+import com.google.crypto.tink.signature.PublicKeySignFactory
+import com.google.crypto.tink.signature.PublicKeyVerifyFactory
 import com.google.crypto.tink.signature.SignatureConfig
 import java.io.File
 import org.junit.Assert.assertEquals
@@ -73,13 +72,14 @@ class AuthInteropInstrumentedTest {
         ).joinToString("|")
         val contextBytes = contextString.toByteArray(Charsets.UTF_8)
 
-        // 4. Sign with Tink (raw 64-byte RFC 8032 signature).
-        val signer = handle.getPrimitive(RegistryConfiguration.get(), PublicKeySign::class.java)
+        // 4. Sign with Tink (raw 64-byte RFC 8032 signature) via the legacy Registry
+        //    populated by SignatureConfig.register().
+        val signer = PublicKeySignFactory.getPrimitive(handle)
         val signature = signer.sign(contextBytes)
         assertEquals(64, signature.size)
 
         // 5. Sanity: Tink verifies its own signature (guard, not the interop proof).
-        val verifier = handle.getPrimitive(RegistryConfiguration.get(), PublicKeyVerify::class.java)
+        val verifier = PublicKeyVerifyFactory.getPrimitive(handle)
         verifier.verify(signature, contextBytes)
 
         // 6. Export fixture: raw bytes → standard base64. The Worker decodes and
