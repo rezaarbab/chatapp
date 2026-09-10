@@ -48,8 +48,14 @@ jobs:
           disable-animations: true
           script: |
             ./gradlew :android:connectedAndroidTest --no-daemon --console=plain > android-test.log 2>&1 || gradle_failed=1
-            ADB=$(command -v adb || echo "$ANDROID_HOME/platform-tools/adb")
-            "$ADB" logcat -d -s TINK_FIXTURE > tink-fixture-raw.log 2>&1
+            ADB=/usr/local/lib/android/sdk/platform-tools/adb
+            [ -x "$ADB" ] || ADB=$(command -v adb)
+            echo "::warning::ADB=$ADB"
+            if [ -x "$ADB" ]; then
+              "$ADB" logcat -d -s TINK_FIXTURE > tink-fixture-raw.log 2>&1 || true
+            else
+              echo "::error::adb binary not found"
+            fi
             if [ "$gradle_failed" = "1" ]; then
               echo "::error::gradle failed during emulator phase"
               tail -n 30 android-test.log | while IFS= read -r l; do echo "::error::GL: ${l:0:400}"; done
