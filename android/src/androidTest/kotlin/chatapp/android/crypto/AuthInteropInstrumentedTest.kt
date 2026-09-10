@@ -4,6 +4,7 @@ import android.util.Base64
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.google.crypto.tink.InsecureSecretKeyAccess
+import com.google.crypto.tink.KeyTemplates
 import com.google.crypto.tink.KeysetHandle
 import com.google.crypto.tink.RegistryConfiguration
 import com.google.crypto.tink.TinkProtoKeysetFormat
@@ -11,7 +12,6 @@ import com.google.crypto.tink.PublicKeySign
 import com.google.crypto.tink.PublicKeyVerify
 import com.google.crypto.tink.proto.Ed25519PrivateKey
 import com.google.crypto.tink.proto.Keyset
-import com.google.crypto.tink.proto.SignatureKeyTemplates
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -36,23 +36,16 @@ class AuthInteropInstrumentedTest {
         val context = InstrumentationRegistry.getInstrumentation().context
 
         // 1. Ed25519 keypair via Tink (standard, audited).
-        val handle = KeysetHandle.generateKeyset(SignatureKeyTemplates.ED25519)
+        val handle = KeysetHandle.generateFrom(KeyTemplates.get("ED25519"))
 
-        // 2. Canonical challenge context (identical construction to Worker §13.5).
-        val challengeId = "6f0a9b3e-8d9c-4f2a-9b1e-5c7d8e9f0a1b"
-        val nonce = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        val username = "alice"
-        val identityPubB64 = "Zm9vYmFyYmF6cXV1eGZvb2JhcmJhenF1dXg=" // sample TOFU anchor
-        val authPubB64 = "PLACEHOLDER_FILLED_BELOW"
-
-        // 3. Export the raw Ed25519 public key (32 bytes) straight from the keyset proto.
+        // 2. Export the raw Ed25519 public key (32 bytes) from the keyset proto.
         val serialized = TinkProtoKeysetFormat.serializeKeyset(handle, InsecureSecretKeyAccess.get())
         val keyset = Keyset.parseFrom(serialized)
         var pubBytes: ByteArray? = null
         for (i in 0 until keyset.keyCount) {
-            val kd = keyset.getKey(i).keyData
-            if (kd.typeUrl.endsWith("Ed25519PrivateKey")) {
-                val privateKey = Ed25519PrivateKey.parseFrom(kd.value)
+            val keyData = keyset.getKey(i).keyData
+            if (keyData.typeUrl.endsWith("Ed25519PrivateKey")) {
+                val privateKey = Ed25519PrivateKey.parseFrom(keyData.value)
                 pubBytes = privateKey.publicKey.keyValue.toByteArray()
             }
         }
@@ -60,7 +53,14 @@ class AuthInteropInstrumentedTest {
         assertEquals(32, pubBytes.size)
         val authPubB64 = Base64.encodeToString(pubBytes, Base64.NO_WRAP)
 
-        val contextString = listOf("v1", "register", challengeId, nonce, username, identityPubB64, authPubB64).joinToString("|")
+        // 3. Canonical challenge context (identical construction to Worker §13.5).
+        val challengeId = "6f0a9b3e-8d9c-4f2a-9b1e-5c7d8e9f0a1b"
+        val nonce = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        val username = "alice"
+        val identityPubB64 = "Zm9vYmFyYmF6cXV1eGZvb2JhcmJhenF1dXg="
+        val contextString = listOf(
+            "v1", "register", challengeId, nonce, username, identityPubB64, authPubB64,
+        ).joinToString("|")
         val contextBytes = contextString.toByteArray(Charsets.UTF_8)
 
         // 4. Sign with Tink (raw 64-byte RFC 8032 signature).
@@ -68,7 +68,7 @@ class AuthInteropInstrumentedTest {
         val signature = signer.sign(contextBytes)
         assertEquals(64, signature.size)
 
-        // 5. Sanity: Tink verifies its own signature (not the interop proof, just a guard).
+        // 5. Sanity: Tink verifies its own signature (guard, not the interop proof).
         val verifier = handle.getPrimitive(RegistryConfiguration.get(), PublicKeyVerify::class.java)
         verifier.verify(signature, contextBytes)
 
