@@ -16,7 +16,7 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
         // libsignal-android 0.102.1 AAR metadata requires core library desugaring
-        coreLibraryDesugaringEnabled = true
+        isCoreLibraryDesugaringEnabled = true
     }
 
     packaging {
