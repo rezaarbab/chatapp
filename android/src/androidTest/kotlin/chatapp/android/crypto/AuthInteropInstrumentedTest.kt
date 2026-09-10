@@ -6,12 +6,13 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.google.crypto.tink.InsecureSecretKeyAccess
 import com.google.crypto.tink.KeysetHandle
 import com.google.crypto.tink.RegistryConfiguration
-import com.google.crypto.tink.TinkConfig
 import com.google.crypto.tink.TinkProtoKeysetFormat
 import com.google.crypto.tink.PublicKeySign
 import com.google.crypto.tink.PublicKeyVerify
 import com.google.crypto.tink.proto.Ed25519PrivateKey
 import com.google.crypto.tink.proto.Keyset
+import com.google.crypto.tink.signature.Ed25519Parameters
+import com.google.crypto.tink.signature.SignatureConfig
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -35,13 +36,12 @@ class AuthInteropInstrumentedTest {
     fun tinkSignsChallengeContextForWebCryptoVerification() {
         val context = InstrumentationRegistry.getInstrumentation().context
 
-        // 0. Register default Tink key managers (populates the named-parameters registry;
-        //    without this, "ED25519" is not resolvable in tink-android 1.23).
-        TinkConfig.register()
+        // 0. Register Ed25519 key managers (official entry point in tink-android 1.23).
+        SignatureConfig.register()
 
-        // 1. Ed25519 keypair via Tink (standard, audited) — Tink 1.23 builder API.
+        // 1. Ed25519 keypair via Tink — NO_PREFIX variant ⇒ raw 64-byte signatures.
         val handle = KeysetHandle.newBuilder()
-            .addEntry(KeysetHandle.generateEntryFromParametersName("ED25519"))
+            .addEntry(KeysetHandle.generateEntryFromParameters(Ed25519Parameters.create()))
             .build()
 
         // 2. Export the raw Ed25519 public key (32 bytes) from the keyset proto.
