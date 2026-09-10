@@ -120,7 +120,7 @@ class CryptoOnDeviceTest {
     }
 
     @Test
-    fun `keystore wrapped passphrase reopens encrypted database after restart`() {
+    fun keystoreWrappedPassphraseReopensEncryptedDatabaseAfterRestart() {
         val alice = Device(context, "alice", "alias_alice_a", "alice", 1)
         val bob = Device(context, "bob", "alias_bob_a", "bob", 1)
         alice.open()
@@ -161,7 +161,7 @@ class CryptoOnDeviceTest {
     }
 
     @Test
-    fun `one-time prekeys are consumed after first decrypt`() {
+    fun oneTimePrekeysAreConsumedAfterFirstDecrypt() {
         val alice = Device(context, "alice2", "alias_alice_b", "alice", 1)
         val bob = Device(context, "bob2", "alias_bob_b", "bob", 1)
         alice.open()
