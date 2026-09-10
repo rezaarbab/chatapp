@@ -101,14 +101,14 @@ jobs:
         if: failure()
         run: |
           if [ -f android-test.log ]; then
-            echo "::warning::total lines: $(wc -l < android-test.log)"
-            grep -E "^e: file:|^FAILURE: |^Execution failed for task|Caused by:|What went wrong|FAILED|no connected|DeviceException|Exception|error:|exit value|killed|OutOfMemory" android-test.log | head -n 25 | while IFS= read -r line; do echo "::error::${line:0:480}"; done || true
-            total=$(wc -l < android-test.log); start=$((total > 90 ? total - 90 : 1)); sed -n "${start},${total}p" android-test.log | while IFS= read -r line; do echo "::warning::T: ${line:0:400}"; done || true
+            echo "::error::log lines: $(wc -l < android-test.log)"
+            total=$(wc -l < android-test.log); start=$((total > 22 ? total - 22 : 1))
+            sed -n "${start},${total}p" android-test.log | while IFS= read -r l; do echo "::error::TAIL: $(printf '%.320s' "$l")"; done
+            free -h 2>&1 | while IFS= read -r l; do echo "::error::MEM: $l"; done
+            df -h / 2>&1 | while IFS= read -r l; do echo "::error::DISK: $l"; done
+            sudo dmesg 2>/dev/null | grep -iE "oom|killed process|out of memory" | tail -n 5 | while IFS= read -r l; do echo "::error::DMESG: $(printf '%.320s' "$l")"; done
           else
             echo "::error::android-test.log missing (emulator boot or action-level failure)"
-          fi
-          if [ -f backend/worker/interop-test.log ]; then
-            grep -E "FAIL|Error:|AssertionError|✗|×" backend/worker/interop-test.log | head -n 25 | while IFS= read -r line; do echo "::error::${line:0:500}"; done || true
           fi
       - name: Failure diagnostics into step summary
         if: always()
