@@ -76,11 +76,11 @@ jobs:
         if: failure()
         run: |
           if [ -f android-test.log ]; then
-            grep -E "^e: file:|^FAILURE: |^Execution failed for task|Caused by:|What went wrong|FAILED" android-test.log | head -n 25 | while IFS= read -r line; do echo "::error::${line:0:500}"; done || true
+            grep -E "^e: file:|^FAILURE: |^Execution failed for task|Caused by:|What went wrong|FAILED|no connected|DeviceException" android-test.log | head -n 20 | while IFS= read -r line; do echo "::error::${line:0:480}"; done || true
+            tail -n 40 android-test.log | while IFS= read -r line; do echo "::error::log: ${line:0:480}"; done || true
+          else
+            echo "::error::android-test.log missing (emulator boot or action-level failure)"
           fi
-          find android/build/outputs/androidTest-results -name "*.xml" 2>/dev/null | while IFS= read -r f; do
-            grep -A4 "<failure" "$f" | head -n 24 | while IFS= read -r line; do echo "::error::${line:0:480}"; done || true
-          done
           if [ -f backend/worker/interop-test.log ]; then
             grep -E "FAIL|Error:|AssertionError|✗|×" backend/worker/interop-test.log | head -n 25 | while IFS= read -r line; do echo "::error::${line:0:500}"; done || true
           fi
