@@ -41,7 +41,7 @@ class CryptoOnDeviceTest {
         label: String,
         private val alias: String,
         name: String,
-        deviceId: Int,
+        private val deviceId: Int,
     ) {
         private val dbFile: File = context.getDatabasePath("proto_$label.db")
         lateinit var store: SqlCipherProtocolStore
