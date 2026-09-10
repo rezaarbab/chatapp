@@ -73,7 +73,26 @@ jobs:
         working-directory: backend/worker
         run: |
           npm install --legacy-peer-deps --no-fund --no-audit > npm-install.log 2>&1 || { tail -n 25 npm-install.log; exit 1; }
-          npx vitest run --reporter=verbose 2>&1 | tee interop-test.log
+          npx vitest run --reporter=verbose interop 2>&1 | tee interop-test.log
+  worker-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install deps
+        working-directory: backend/worker
+        run: npm install --legacy-peer-deps --no-fund --no-audit > npm-install.log 2>&1 || { tail -n 25 npm-install.log; exit 1; }
+      - name: Run migration/auth/token tests (miniflare D1)
+        working-directory: backend/worker
+        run: npx vitest run --reporter=verbose migrations auth 2>&1 | tee worker-tests.log
+      - name: Emit worker test failure diagnostics
+        if: failure()
+        working-directory: backend/worker
+        run: |
+          grep -E "FAIL|✗|×|AssertionError|Error:" worker-tests.log | head -n 8 | while IFS= read -r l; do echo "::error::WT: $(printf '%.320s' "$l")"; done
+          tail -n 20 worker-tests.log | while IFS= read -r l; do echo "::error::WT-TAIL: $(printf '%.320s' "$l")"; done
       - name: Emit failure diagnostics as annotations
         if: failure()
         run: |

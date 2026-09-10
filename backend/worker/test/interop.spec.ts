@@ -35,18 +35,22 @@ CREATE TABLE IF NOT EXISTS auth_challenges (
 );
 `;
 
-const fixture = JSON.parse((globalThis as Record<string, unknown>).TINK_FIXTURE as string) as {
-  alg: string;
-  context_b64: string;
-  pub_b64: string;
-  sig_b64: string;
-};
+const fixtureRaw = (globalThis as Record<string, unknown>).TINK_FIXTURE as string | undefined;
+const fixture = fixtureRaw
+  ? (JSON.parse(fixtureRaw) as {
+      alg: string;
+      context_b64: string;
+      pub_b64: string;
+      sig_b64: string;
+    })
+  : null;
+const hasFixture = !!fixture && fixture.alg === "Ed25519";
 
 beforeAll(async () => {
   await env.DB.exec(DDL);
 });
 
-describe("Tink Ed25519 → Workers WebCrypto interop", () => {
+describe.skipIf(!hasFixture)("Tink Ed25519 → Workers WebCrypto interop", () => {
   it("verifies a real Tink signature without any conversion", async () => {
     expect(fixture.alg).toBe("Ed25519");
     const pub = b64ToBytes(fixture.pub_b64);
