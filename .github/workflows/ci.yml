@@ -44,15 +44,29 @@ jobs:
           target: google_apis
           arch: x86_64
           disable-animations: true
-          script: ./gradlew :android:connectedAndroidTest --no-daemon --console=plain > android-test.log 2>&1; ADB=$(command -v adb || echo "$ANDROID_HOME/platform-tools/adb"); "$ADB" shell pm list packages 2>&1 | grep -i chatapp | while IFS= read -r l; do echo "::warning::PKG:$l"; done; "$ADB" shell run-as chatapp.android.test ls -la files 2>&1 | while IFS= read -r l; do echo "::warning::LS:$l"; done; "$ADB" shell run-as chatapp.android.test cat files/fixture.json > backend/worker/tink-fixture.json 2>/dev/null && echo "::warning::EXP1-ok" || echo "::warning::EXP1-fail"; if [ ! -s backend/worker/tink-fixture.json ]; then "$ADB" shell run-as chatapp.android cat files/fixture.json > backend/worker/tink-fixture.json 2>/dev/null && echo "::warning::EXP2-ok" || echo "::warning::EXP2-fail"; fi; if [ ! -s backend/worker/tink-fixture.json ]; then "$ADB" shell cat /storage/emulated/0/Android/data/chatapp.android.test/files/fixture.json > backend/worker/tink-fixture.json 2>/dev/null && echo "::warning::EXP3-ok" || echo "::warning::EXP3-fail"; fi; head -c 100 backend/worker/tink-fixture.json 2>/dev/null | while IFS= read -r l; do echo "::warning::FIX:$l"; done; exit 0
-      - name: Fixture gate
+          script: ./gradlew :android:connectedAndroidTest --no-daemon --console=plain > android-test.log 2>&1; exit 0
+      - name: Extract interop fixture and gate
         run: |
           tail -n 12 android-test.log || true
-          if [ ! -s backend/worker/tink-fixture.json ]; then
-            echo "::error::Tink fixture missing or empty"
+          if grep -q "BUILD FAILED" android-test.log; then
+            grep -E "^e: file:|Caused by:|FAILED" android-test.log | head -n 20 | while IFS= read -r line; do echo "::error::${line:0:480}"; done || true
             exit 1
           fi
-          echo "fixture OK"
+          xml=$(find android/build/outputs/androidTest-results -name "TEST-*.xml" | head -1)
+          if [ -z "$xml" ]; then
+            echo "::error::no androidTest XML found"
+            exit 1
+          fi
+          ctx=$(grep -ohE "TINK_FIXTURE_CONTEXT=[A-Za-z0-9+/=]+" "$xml" | head -1 | cut -d= -f2-)
+          pub=$(grep -ohE "TINK_FIXTURE_PUB=[A-Za-z0-9+/=]+" "$xml" | head -1 | cut -d= -f2-)
+          sig=$(grep -ohE "TINK_FIXTURE_SIG=[A-Za-z0-9+/=]+" "$xml" | head -1 | cut -d= -f2-)
+          if [ -z "$ctx" ] || [ -z "$pub" ] || [ -z "$sig" ]; then
+            echo "::error::fixture markers not found in $xml"
+            exit 1
+          fi
+          printf '{\n  "alg": "Ed25519",\n  "context_b64": "%s",\n  "pub_b64": "%s",\n  "sig_b64": "%s"\n}\n' "$ctx" "$pub" "$sig" > backend/worker/tink-fixture.json
+          echo "fixture extracted:"
+          cat backend/worker/tink-fixture.json
       - name: Run Tink→WebCrypto interop tests in workerd (miniflare)
         working-directory: backend/worker
         run: |
