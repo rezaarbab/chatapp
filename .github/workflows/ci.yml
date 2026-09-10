@@ -76,8 +76,8 @@ jobs:
         if: failure()
         run: |
           if [ -f android-test.log ]; then
-            grep -E "^e: file:|^FAILURE: |^Execution failed for task|Caused by:|What went wrong|FAILED|no connected|DeviceException" android-test.log | head -n 20 | while IFS= read -r line; do echo "::error::${line:0:480}"; done || true
-            tail -n 40 android-test.log | while IFS= read -r line; do echo "::error::log: ${line:0:480}"; done || true
+            grep -E "^e: file:|^FAILURE: |^Execution failed for task|Caused by:|What went wrong|FAILED|no connected|DeviceException|Exception|error:" android-test.log | head -n 25 | while IFS= read -r line; do echo "::error::${line:0:480}"; done || true
+            cat android-test.log | head -n 110 | while IFS= read -r line; do echo "::warning::L: ${line:0:400}"; done || true
           else
             echo "::error::android-test.log missing (emulator boot or action-level failure)"
           fi
