@@ -72,7 +72,7 @@ jobs:
       - name: Run Tink→WebCrypto interop tests in workerd (miniflare)
         working-directory: backend/worker
         run: |
-          npm install --no-fund --no-audit > npm-install.log 2>&1 || { tail -n 25 npm-install.log; exit 1; }
+          npm install --legacy-peer-deps --no-fund --no-audit > npm-install.log 2>&1 || { tail -n 25 npm-install.log; exit 1; }
           npx vitest run --reporter=verbose 2>&1 | tee interop-test.log
       - name: Emit failure diagnostics as annotations
         if: failure()
