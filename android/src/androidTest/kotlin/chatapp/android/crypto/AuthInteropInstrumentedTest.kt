@@ -91,13 +91,11 @@ class AuthInteropInstrumentedTest {
             put("pub_b64", authPubB64)
             put("sig_b64", Base64.encodeToString(signature, Base64.NO_WRAP))
         }
-        // Export via stdout: AndroidJUnitRunner captures System.out into the
-        // <system-out> block of the connected-test XML report. Base64 contains
-        // no XML-special characters, so CI can extract it losslessly — this
-        // survives AGP's post-test APK uninstall (which wipes app data).
-        println("TINK_FIXTURE_CONTEXT=${fixture.getString("context_b64")}")
-        println("TINK_FIXTURE_PUB=${fixture.getString("pub_b64")}")
-        println("TINK_FIXTURE_SIG=${fixture.getString("sig_b64")}")
+        // Export via logcat: survives AGP's post-test APK uninstall. CI dumps the
+        // TINK_FIXTURE logcat buffer while the emulator is still alive.
+        android.util.Log.i("TINK_FIXTURE", "TINK_CONTEXT=${fixture.getString("context_b64")}")
+        android.util.Log.i("TINK_FIXTURE", "TINK_PUB=${fixture.getString("pub_b64")}")
+        android.util.Log.i("TINK_FIXTURE", "TINK_SIG=${fixture.getString("sig_b64")}")
 
         val out = File(context.filesDir, "fixture.json")
         out.writeText(fixture.toString())

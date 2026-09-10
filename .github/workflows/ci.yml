@@ -44,7 +44,7 @@ jobs:
           target: google_apis
           arch: x86_64
           disable-animations: true
-          script: ./gradlew :android:connectedAndroidTest --no-daemon --console=plain > android-test.log 2>&1; exit 0
+          script: ./gradlew :android:connectedAndroidTest --no-daemon --console=plain > android-test.log 2>&1; ADB=$(command -v adb || echo "$ANDROID_HOME/platform-tools/adb"); "$ADB" logcat -d -s TINK_FIXTURE > tink-fixture-raw.log 2>&1; exit 0
       - name: Extract interop fixture and gate
         run: |
           tail -n 12 android-test.log || true
@@ -52,16 +52,16 @@ jobs:
             grep -E "^e: file:|Caused by:|FAILED" android-test.log | head -n 20 | while IFS= read -r line; do echo "::error::${line:0:480}"; done || true
             exit 1
           fi
-          xml=$(find android/build/outputs/androidTest-results -name "TEST-*.xml" | head -1)
-          if [ -z "$xml" ]; then
-            echo "::error::no androidTest XML found"
+          if [ ! -s tink-fixture-raw.log ]; then
+            echo "::error::tink-fixture-raw.log missing or empty"
             exit 1
           fi
-          ctx=$(grep -ohE "TINK_FIXTURE_CONTEXT=[A-Za-z0-9+/=]+" "$xml" | head -1 | cut -d= -f2-)
-          pub=$(grep -ohE "TINK_FIXTURE_PUB=[A-Za-z0-9+/=]+" "$xml" | head -1 | cut -d= -f2-)
-          sig=$(grep -ohE "TINK_FIXTURE_SIG=[A-Za-z0-9+/=]+" "$xml" | head -1 | cut -d= -f2-)
+          ctx=$(grep -ohE "TINK_CONTEXT=[A-Za-z0-9+/=]+" tink-fixture-raw.log | head -1 | cut -d= -f2-)
+          pub=$(grep -ohE "TINK_PUB=[A-Za-z0-9+/=]+" tink-fixture-raw.log | head -1 | cut -d= -f2-)
+          sig=$(grep -ohE "TINK_SIG=[A-Za-z0-9+/=]+" tink-fixture-raw.log | head -1 | cut -d= -f2-)
           if [ -z "$ctx" ] || [ -z "$pub" ] || [ -z "$sig" ]; then
-            echo "::error::fixture markers not found in $xml"
+            echo "::error::fixture markers not found in logcat dump"
+            head -n 10 tink-fixture-raw.log || true
             exit 1
           fi
           printf '{\n  "alg": "Ed25519",\n  "context_b64": "%s",\n  "pub_b64": "%s",\n  "sig_b64": "%s"\n}\n' "$ctx" "$pub" "$sig" > backend/worker/tink-fixture.json
