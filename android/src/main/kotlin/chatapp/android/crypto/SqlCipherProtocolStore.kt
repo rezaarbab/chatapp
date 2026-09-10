@@ -5,7 +5,6 @@ import android.database.Cursor
 import java.io.File
 import java.security.SecureRandom
 import net.zetetic.database.DatabaseErrorHandler
-import net.zetetic.database.sqlcipher.CursorFactory
 import net.zetetic.database.sqlcipher.SQLiteDatabase
 import org.signal.libsignal.protocol.IdentityKey
 import org.signal.libsignal.protocol.IdentityKeyPair
@@ -71,7 +70,7 @@ class SqlCipherProtocolStore(private val db: SQLiteDatabase) :
             val db = SQLiteDatabase.openOrCreateDatabase(
                 file,
                 passphrase,
-                null as CursorFactory?,
+                null as SQLiteDatabase.CursorFactory?,
                 null as DatabaseErrorHandler?,
             )
             val store = SqlCipherProtocolStore(db)

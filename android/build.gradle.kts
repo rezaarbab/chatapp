@@ -36,6 +36,8 @@ dependencies {
     implementation("org.signal:libsignal-android:0.102.1")
     // SQLCipher Community edition (latest on Maven Central as of 2026-09)
     implementation("net.zetetic:sqlcipher-android:4.19.0")
+    // Required: sqlcipher-android's SQLiteDatabase exposes androidx.sqlite.db supertypes
+    implementation("androidx.sqlite:sqlite:2.7.0")
 
     androidTestImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
