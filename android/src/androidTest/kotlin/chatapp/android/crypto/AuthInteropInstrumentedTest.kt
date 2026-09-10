@@ -79,7 +79,8 @@ class AuthInteropInstrumentedTest {
         assertEquals(64, signature.size)
 
         // 5. Sanity: Tink verifies its own signature (guard, not the interop proof).
-        val verifier = PublicKeyVerifyFactory.getPrimitive(handle)
+        //    Verification operates on the PUBLIC keyset handle (standard Tink pattern).
+        val verifier = PublicKeyVerifyFactory.getPrimitive(handle.getPublic())
         verifier.verify(signature, contextBytes)
 
         // 6. Export fixture: raw bytes → standard base64. The Worker decodes and
