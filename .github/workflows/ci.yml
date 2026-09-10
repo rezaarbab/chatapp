@@ -46,7 +46,19 @@ jobs:
           target: google_apis
           arch: x86_64
           disable-animations: true
-          script: ./gradlew :android:connectedAndroidTest --no-daemon --console=plain > android-test.log 2>&1 || gradle_failed=1; ADB=$(command -v adb || echo "$ANDROID_HOME/platform-tools/adb"); "$ADB" logcat -d -s TINK_FIXTURE > tink-fixture-raw.log 2>&1; if [ "$gradle_failed" = "1" ]; then echo "::error::gradle failed during emulator phase"; tail -n 30 android-test.log | while IFS= read -r l; do echo "::error::GL: ${l:0:400}"; done; free -h 2>&1 | while IFS= read -r l; do echo "::warning::MEM: $l"; done; df -h / 2>&1 | while IFS= read -r l; do echo "::warning::DISK: $l"; done; sudo dmesg 2>/dev/null | tail -n 15 | while IFS= read -r l; do echo "::warning::DMESG: $l"; done; exit 1; fi; exit 0
+          script: |
+            ./gradlew :android:connectedAndroidTest --no-daemon --console=plain > android-test.log 2>&1 || gradle_failed=1
+            ADB=$(command -v adb || echo "$ANDROID_HOME/platform-tools/adb")
+            "$ADB" logcat -d -s TINK_FIXTURE > tink-fixture-raw.log 2>&1
+            if [ "$gradle_failed" = "1" ]; then
+              echo "::error::gradle failed during emulator phase"
+              tail -n 30 android-test.log | while IFS= read -r l; do echo "::error::GL: ${l:0:400}"; done
+              free -h 2>&1 | while IFS= read -r l; do echo "::warning::MEM: $l"; done
+              df -h / 2>&1 | while IFS= read -r l; do echo "::warning::DISK: $l"; done
+              sudo dmesg 2>/dev/null | tail -n 15 | while IFS= read -r l; do echo "::warning::DMESG: $l"; done
+              exit 1
+            fi
+            exit 0
       - name: Extract interop fixture and gate
         run: |
           tail -n 12 android-test.log || true
