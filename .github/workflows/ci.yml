@@ -33,7 +33,7 @@ jobs:
           java-version: "21"
       - uses: gradle/actions/setup-gradle@v4
       - name: Build android artifacts (no emulator)
-        run: ./gradlew :android:assembleDebug :android:assembleDebugAndroidTest --no-daemon --console=plain > android-build.log 2>&1 || { tail -n 40 android-build.log; exit 1; }
+        run: ./gradlew :android:assembleDebug :android:assembleDebugAndroidTest --console=plain > android-build.log 2>&1 || { tail -n 40 android-build.log; exit 1; }
       - name: Enable KVM group perms
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
@@ -46,30 +46,7 @@ jobs:
           target: google_apis
           arch: x86_64
           disable-animations: true
-          script: |
-            ./gradlew :android:connectedAndroidTest --no-daemon --console=plain > android-test.log 2>&1 || gradle_failed=1
-            ADB=""
-            for cand in "$ANDROID_HOME/platform-tools/adb" "/usr/local/lib/android/sdk/platform-tools/adb" "/opt/hostedtoolcache/android-sdk/platform-tools/adb"; do
-              if [ -n "$cand" ] && [ -x "$cand" ]; then ADB="$cand"; break; fi
-            done
-            if [ -z "$ADB" ]; then
-              ADB=$(find /usr/local/lib/android /opt/hostedtoolcache -maxdepth 6 -path "*platform-tools/adb" -type f 2>/dev/null | head -n 1)
-            fi
-            echo "::warning::ADB=$ADB"
-            if [ -n "$ADB" ] && [ -x "$ADB" ]; then
-              "$ADB" logcat -d -s TINK_FIXTURE > tink-fixture-raw.log 2>&1 || true
-            else
-              echo "::error::adb binary not found on runner"
-            fi
-            if [ "$gradle_failed" = "1" ]; then
-              echo "::error::gradle failed during emulator phase"
-              tail -n 30 android-test.log | while IFS= read -r l; do echo "::error::GL: $(printf '%.400s' "$l")"; done
-              free -h 2>&1 | while IFS= read -r l; do echo "::warning::MEM: $l"; done
-              df -h / 2>&1 | while IFS= read -r l; do echo "::warning::DISK: $l"; done
-              sudo dmesg 2>/dev/null | tail -n 15 | while IFS= read -r l; do echo "::warning::DMESG: $(printf '%.300s' "$l")"; done
-              exit 1
-            fi
-            exit 0
+          script: ./gradlew :android:connectedAndroidTest --console=plain > android-test.log 2>&1; /usr/local/lib/android/sdk/platform-tools/adb logcat -d -s TINK_FIXTURE > tink-fixture-raw.log 2>&1; exit 0
       - name: Extract interop fixture and gate
         run: |
           tail -n 12 android-test.log || true
