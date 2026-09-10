@@ -101,12 +101,11 @@ jobs:
         if: failure()
         run: |
           if [ -f android-test.log ]; then
-            echo "::error::log lines: $(wc -l < android-test.log)"
-            total=$(wc -l < android-test.log); start=$((total > 22 ? total - 22 : 1))
-            sed -n "${start},${total}p" android-test.log | while IFS= read -r l; do echo "::error::TAIL: $(printf '%.320s' "$l")"; done
+            sudo dmesg 2>/dev/null | grep -iE "oom|killed process|out of memory" | tail -n 5 | while IFS= read -r l; do echo "::error::DMESG: $(printf '%.320s' "$l")"; done
             free -h 2>&1 | while IFS= read -r l; do echo "::error::MEM: $l"; done
             df -h / 2>&1 | while IFS= read -r l; do echo "::error::DISK: $l"; done
-            sudo dmesg 2>/dev/null | grep -iE "oom|killed process|out of memory" | tail -n 5 | while IFS= read -r l; do echo "::error::DMESG: $(printf '%.320s' "$l")"; done
+            total=$(wc -l < android-test.log); start=$((total > 12 ? total - 12 : 1))
+            sed -n "${start},${total}p" android-test.log | while IFS= read -r l; do echo "::error::TAIL: $(printf '%.320s' "$l")"; done
           else
             echo "::error::android-test.log missing (emulator boot or action-level failure)"
           fi
