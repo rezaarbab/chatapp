@@ -45,22 +45,26 @@ jobs:
           arch: x86_64
           disable-animations: true
           script: |
+            echo "::warning::S1 gradle starting"
             if ./gradlew :android:connectedAndroidTest --no-daemon --console=plain > android-test.log 2>&1; then
+              echo "::warning::S2 gradle ok"
               tail -n 15 android-test.log || true
             else
+              echo "::warning::S2 gradle failed"
               tail -n 30 android-test.log || true
               exit 1
             fi
+            echo "::warning::S3 adb fixture export attempts"
             for pkg in chatapp.android.test chatapp.android; do
               if adb shell run-as $pkg cat files/fixture.json > backend/worker/tink-fixture.json 2>/dev/null; then
-                echo "fixture exported from $pkg"
+                echo "::warning::S3 fixture exported from $pkg"
                 cat backend/worker/tink-fixture.json
                 exit 0
               fi
             done
-            echo "::error::Tink fixture not found on device"
-            adb devices
-            adb shell pm list packages 2>/dev/null | grep -i chatapp || true
+            echo "::warning::S4 fixture not found on device"
+            adb devices 2>&1 | while IFS= read -r line; do echo "::warning::devices: $line"; done
+            adb shell pm list packages 2>/dev/null | grep -i chatapp | while IFS= read -r line; do echo "::warning::pkg: $line"; done
             exit 1
       - name: Run Tink→WebCrypto interop tests in workerd (miniflare)
         working-directory: backend/worker
