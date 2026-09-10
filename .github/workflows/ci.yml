@@ -46,7 +46,7 @@ jobs:
           target: google_apis
           arch: x86_64
           disable-animations: true
-          script: ./gradlew :android:connectedAndroidTest --no-daemon --console=plain >> android-test.log 2>&1 || ./gradlew :android:connectedAndroidTest --no-daemon --console=plain >> android-test.log 2>&1; ADB=$(cat adb-path.txt); "$ADB" logcat -d -s TINK_FIXTURE > tink-fixture-raw.log 2>&1; exit 0
+          script: ./gradlew :android:connectedAndroidTest --no-daemon --console=plain >> android-test.log 2>&1 || ./gradlew :android:connectedAndroidTest --no-daemon --console=plain >> android-test.log 2>&1; ADB=$(cat adb-path.txt); "$ADB" logcat -d -s TINK_FIXTURE > tink-fixture-raw.log 2>&1 || true; exit 0
       - name: Extract interop fixture and gate
         run: |
           tail -n 12 android-test.log || true
