@@ -1,0 +1,8 @@
+{
+  "name": "chatapp-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "d1_databases": [
+    { "binding": "DB", "database_name": "chatapp-dev", "database_id": "local" }
+  ]
+}

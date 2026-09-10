@@ -7,3 +7,5 @@ local.properties
 .cxx/
 captures/
 externalNativeBuild/
+node_modules/
+tink-fixture.json

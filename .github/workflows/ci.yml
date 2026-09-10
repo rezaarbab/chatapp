@@ -45,14 +45,23 @@ jobs:
           arch: x86_64
           disable-animations: true
           script: ./gradlew :android:connectedAndroidTest --no-daemon --console=plain > android-test.log 2>&1
+      - name: Export Tink interop fixture from device
+        run: |
+          "$ANDROID_HOME/platform-tools/adb" shell run-as chatapp.android.test cat files/fixture.json > backend/worker/tink-fixture.json
+          cat backend/worker/tink-fixture.json
+      - name: Run Tink→WebCrypto interop tests in workerd (miniflare)
+        working-directory: backend/worker
+        run: |
+          npm install --no-fund --no-audit
+          npx vitest run --reporter=verbose 2>&1 | tee interop-test.log
       - name: Emit failure diagnostics as annotations
         if: failure()
         run: |
           if [ -f android-test.log ]; then
-            grep -E "^e: file:|^FAILURE: |^Execution failed for task|^Caused by:|What went wrong|FAILED" android-test.log | head -n 30 | while IFS= read -r line; do echo "::error::${line:0:500}"; done || true
-            tail -n 40 android-test.log | while IFS= read -r line; do echo "::error::${line:0:500}"; done || true
-          else
-            echo "::error::android-test.log not found - gradle never started"
+            grep -E "^e: file:|^FAILURE: |^Execution failed for task|Caused by:|What went wrong|FAILED" android-test.log | head -n 25 | while IFS= read -r line; do echo "::error::${line:0:500}"; done || true
+          fi
+          if [ -f backend/worker/interop-test.log ]; then
+            grep -E "FAIL|Error:|AssertionError|✗|×" backend/worker/interop-test.log | head -n 25 | while IFS= read -r line; do echo "::error::${line:0:500}"; done || true
           fi
       - name: Failure diagnostics into step summary
         if: always()
