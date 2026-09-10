@@ -41,7 +41,9 @@ class AuthInteropInstrumentedTest {
 
         // 1. Ed25519 keypair via Tink — NO_PREFIX variant ⇒ raw 64-byte signatures.
         val handle = KeysetHandle.newBuilder()
-            .addEntry(KeysetHandle.generateEntryFromParameters(Ed25519Parameters.create()))
+            .addEntry(
+                KeysetHandle.generateEntryFromParameters(Ed25519Parameters.create()).withRandomId(),
+            )
             .build()
 
         // 2. Export the raw Ed25519 public key (32 bytes) from the keyset proto.
