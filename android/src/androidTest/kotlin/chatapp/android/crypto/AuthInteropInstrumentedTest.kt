@@ -94,5 +94,13 @@ class AuthInteropInstrumentedTest {
         val out = File(context.filesDir, "fixture.json")
         out.writeText(fixture.toString())
         assertTrue(out.exists() && out.length() > 0)
+
+        // Also write to external files dir so CI can read it via plain adb (no run-as).
+        val extDir = context.getExternalFilesDir(null)
+        if (extDir != null) {
+            val extOut = File(extDir, "fixture.json")
+            extOut.writeText(fixture.toString())
+            assertTrue(extOut.exists() && extOut.length() > 0)
+        }
     }
 }
