@@ -45,6 +45,15 @@ jobs:
           arch: x86_64
           disable-animations: true
           script: ./gradlew :android:connectedAndroidTest --no-daemon --console=plain > android-test.log 2>&1
+      - name: Emit failure diagnostics as annotations
+        if: failure()
+        run: |
+          if [ -f android-test.log ]; then
+            grep -E "^e: file:|^FAILURE: |^Execution failed for task|^Caused by:|What went wrong|FAILED" android-test.log | head -n 30 | while IFS= read -r line; do echo "::error::${line:0:500}"; done || true
+            tail -n 40 android-test.log | while IFS= read -r line; do echo "::error::${line:0:500}"; done || true
+          else
+            echo "::error::android-test.log not found - gradle never started"
+          fi
       - name: Failure diagnostics into step summary
         if: always()
         run: |
