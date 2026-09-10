@@ -15,6 +15,8 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        // libsignal-android 0.102.1 AAR metadata requires core library desugaring
+        coreLibraryDesugaringEnabled = true
     }
 
     packaging {
@@ -32,6 +34,7 @@ kotlin {
 }
 
 dependencies {
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.5")
     // Official Signal Android artifact (contains Android .so natives)
     implementation("org.signal:libsignal-android:0.102.1")
     // SQLCipher Community edition. 4.17.0 is the newest release whose AAR metadata
