@@ -297,10 +297,24 @@ const handleAddDevice: Handler = async (ctx) => {
   });
   const contextBytes = new TextEncoder().encode(context);
 
-  const newDeviceOk = await verifyEd25519(b64ToBytes(row.auth_pub), signature, contextBytes);
-  const authorizerOk = await verifyEd25519(authorizer.auth_pub_key, authorizerSignature, contextBytes);
-  if (!newDeviceOk || !authorizerOk) {
-    throw new HttpError(401, "INVALID_SIGNATURE", "challenge signature invalid");
+  const reasons: string[] = [];
+  let newDeviceOk = false;
+  let authorizerOk = false;
+  try {
+    newDeviceOk = await verifyEd25519(b64ToBytes(row.auth_pub), signature, contextBytes);
+  } catch (e) {
+    reasons.push(`sigNew threw: ${(e as Error).message}`);
+  }
+  if (!newDeviceOk) reasons.push("sigNew=false");
+  try {
+    authorizerOk = await verifyEd25519(asBytes(authorizer.auth_pub_key), authorizerSignature, contextBytes);
+  } catch (e) {
+    reasons.push(`sigAuth threw: ${(e as Error).message}`);
+  }
+  if (!authorizerOk) reasons.push("sigAuth=false");
+  if (!row.authorizer_device_id) reasons.push("row missing authorizer_device_id");
+  if (reasons.length > 0) {
+    throw new HttpError(401, "INVALID_SIGNATURE", `add_device failed: ${reasons.join("; ")}`);
   }
 
   const deviceId = crypto.randomUUID();
@@ -428,9 +442,11 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
     return await match.handler(ctx, params);
   } catch (e) {
     if (env.DEBUG_ERRORS === "true" && e instanceof Error) {
+      const status = e instanceof HttpError ? e.status : 500;
+      const code = e instanceof HttpError ? e.code : "INTERNAL";
       return jsonResponse(
-        { error: { code: "INTERNAL", message: e.message, stack: (e.stack || "").slice(0, 1500) } },
-        500,
+        { error: { code, message: e.message, stack: (e.stack || "").slice(0, 1200) } },
+        status,
       );
     }
     return errorResponse(e);
