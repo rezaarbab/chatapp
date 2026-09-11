@@ -4,8 +4,8 @@
  *
  * No credentials are stored anywhere: every keypair is generated at runtime and
  * discarded. Tokens are never printed. Covers the full auth lifecycle:
- * register â†’ token â†’ use â†’ re-auth â†’ add_device â†’ revoke â†’ invalidation â†’
- * real token expiry (staging TTL) â†’ duplicate-username anti-enumeration shape.
+ * register → token → use → re-auth → add_device → revoke → invalidation →
+ * real token expiry (staging TTL) → duplicate-username anti-enumeration shape.
  */
 
 const BASE = (process.env.STAGING_URL || "").replace(/\/+$/, "");
@@ -17,20 +17,27 @@ if (!BASE) {
 }
 
 let failures = 0;
+const steps = [];
+
 function pass(name) {
   console.log(`[PASS] ${name}`);
 }
+
 function fail(name, extra) {
   failures += 1;
   console.error(`[FAIL] ${name}${extra ? ` :: ${extra}` : ""}`);
 }
+
 function check(name, cond, extra) {
   if (cond) pass(name);
   else fail(name, extra);
 }
+
 function stepLog(name, res) {
   const code = res.body && res.body.error ? res.body.error.code : "";
-  console.log(`[STEP] ${name} status=${res.status} ${code} ${JSON.stringify(res.body).slice(0, 200)}`);
+  const line = `[STEP] ${name} status=${res.status} ${code} ${JSON.stringify(res.body).slice(0, 160)}`;
+  steps.push(line);
+  console.log(line);
 }
 
 function b64(bytes) {
@@ -48,13 +55,13 @@ async function signB64(priv, message) {
   return b64(new Uint8Array(sig));
 }
 
-async function http(method, path, { body, token } = {}) {
+async function http(method, path, opts = {}) {
   const headers = { "content-type": "application/json" };
-  if (token) headers.authorization = `Bearer ${token}`;
-  const res = await fetch(``, {
+  if (opts.token) headers.authorization = `Bearer ${opts.token}`;
+  const res = await fetch(BASE + path, {
     method,
     headers,
-    body: body ? JSON.stringify(body) : undefined,
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
     signal: AbortSignal.timeout(15000),
   });
   let json = {};
@@ -81,18 +88,63 @@ function buildContext(purpose, c) {
 async function waitUntilReachable() {
   for (let attempt = 1; attempt <= 10; attempt++) {
     try {
-      const res = await fetch(`${BASE}/devices/me`, { method: "GET", signal: AbortSignal.timeout(15000) });
+      const res = await fetch(BASE + "/devices/me", {
+        method: "GET",
+        signal: AbortSignal.timeout(15000),
+      });
       if (res.status === 401) return; // worker is up (auth expected)
     } catch {
       // not ready yet
     }
-    await new Promise((r) => setTimeout(r, 3000));
+    await sleep(3000);
   }
-  console.error("worker URL never became reachable");
-  process.exit(1);
+  throw new Error("worker URL never became reachable");
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function issueRegisterChallenge(username, authPubB64, ip) {
+  const identityPubB64 = b64(crypto.getRandomValues(new Uint8Array(32)));
+  const res = await http("POST", "/auth/challenge", {
+    body: { purpose: "register", username, identity_pub: identityPubB64, auth_pub: authPubB64 },
+    ip,
+  });
+  return { res, identityPubB64 };
+}
+
+async function registerAccount(username, ip) {
+  const { priv, pubB64 } = await genKey();
+  const { res, identityPubB64 } = await issueRegisterChallenge(username, pubB64, ip);
+  if (res.status !== 200) {
+    fail(`register challenge for ${username}`, `status=${res.status}`);
+    return null;
+  }
+  const ctx = buildContext("register", {
+    challengeId: res.body.challenge_id,
+    nonce: res.body.nonce,
+    username,
+    identityPubB64,
+    authPubB64: pubB64,
+  });
+  const signature = await signB64(priv, ctx);
+  const reg = await http("POST", "/accounts", {
+    body: { challenge_id: res.body.challenge_id, signature, registration_id: 1000 },
+    ip,
+  });
+  stepLog(`register ${username}`, reg);
+  if (reg.status !== 201) {
+    fail(`account registered (${username})`, `status=${reg.status}`);
+    return null;
+  }
+  return {
+    token: reg.body.token,
+    token_expires_at: reg.body.token_expires_at,
+    device_id: reg.body.device_id,
+    account_id: reg.body.account_id,
+    authPriv: priv,
+    username,
+  };
+}
 
 async function main() {
   await waitUntilReachable();
@@ -101,53 +153,59 @@ async function main() {
   // 1) register: challenge + signature + account creation on real D1
   const username = `smoke_${runStart}`;
   const { priv: priv1, pubB64: pub1 } = await genKey();
-  const identity1 = b64(crypto.getRandomValues(new Uint8Array(32)));
-  const ch1 = await http("POST", "/auth/challenge", {
-    body: { purpose: "register", username, identity_pub: identity1, auth_pub: pub1 },
-  });
-  check("challenge issued (register)", ch1.status === 200 && !!ch1.body.challenge_id && ch1.body.nonce.length === 64);
-  void ch1;
+  const ch1 = await issueRegisterChallenge(username, pub1, "203.0.113.10");
+  check("challenge issued (register)", ch1.res.status === 200 && !!ch1.res.body.challenge_id);
+  stepLog("register challenge", ch1.res);
+
   const ctx1 = buildContext("register", {
-    challengeId: ch1.body.challenge_id,
-    nonce: ch1.body.nonce,
+    challengeId: ch1.res.body.challenge_id,
+    nonce: ch1.res.body.nonce,
     username,
-    identityPubB64: identity1,
+    identityPubB64: ch1.identityPubB64,
     authPubB64: pub1,
   });
   const sig1 = await signB64(priv1, ctx1);
-  const reg = await http("POST", "/accounts", { body: { challenge_id: ch1.body.challenge_id, signature: sig1, registration_id: 1000 } });
-  const token1Expires = reg.body.token_expires_at; // real token expiry from the server
-  check("account registered (201)", reg.status === 201 && !!reg.body.account_id && !!reg.body.device_id && reg.body.dev_no === 1);
+  const reg = await http("POST", "/accounts", {
+    body: { challenge_id: ch1.res.body.challenge_id, signature: sig1, registration_id: 1000 },
+    ip: "203.0.113.10",
+  });
+  stepLog("register account", reg);
+  check(
+    "account registered (201)",
+    reg.status === 201 && !!reg.body.account_id && !!reg.body.device_id && reg.body.dev_no === 1,
+  );
   const token1 = reg.body.token;
   const device1 = reg.body.device_id;
   check("token issued (never logged)", typeof token1 === "string" && token1.length > 20);
 
-  // 2) token use â€” proves real-D1 persistence across requests/isolates
-  const me1 = await http("GET", "/devices/me", { token: token1 });
+  // 2) token use — proves real-D1 persistence across requests/isolates
+  const me1 = await http("GET", "/devices/me", { token: token1, ip: "203.0.113.10" });
+  stepLog("devices/me with token1", me1);
   check(
     "token authenticates on real Cloudflare (D1 persistence)",
     me1.status === 200 && me1.body.device_id === device1 && me1.body.account_id === reg.body.account_id,
   );
 
-  // 3) duplicate username â†’ constant anti-enumeration shape
+  // 3) duplicate username → anti-enumeration shape
   const { pubB64: pubTmp } = await genKey();
-  const dup = await http("POST", "/auth/challenge", {
-    body: { purpose: "register", username, identity_pub: b64(crypto.getRandomValues(new Uint8Array(32))), auth_pub: pubTmp },
-  });
-  check("duplicate username rejected (409)", dup.status === 409 && dup.body.error.code === "USERNAME_TAKEN");
+  const dup = await issueRegisterChallenge(username, pubTmp, "203.0.113.10");
+  check("duplicate username rejected (409)", dup.res.status === 409 && dup.res.body.error.code === "USERNAME_TAKEN");
 
-  // 4) re-auth: auth challenge + verify â†’ second device-bound token
-  const chA = await http("POST", "/auth/challenge", { body: { purpose: "auth", device_id: device1 } });
+  // 4) re-auth: auth challenge + verify → second device-bound token
+  const chA = await http("POST", "/auth/challenge", { body: { purpose: "auth", device_id: device1 }, ip: "203.0.113.10" });
   stepLog("auth challenge", chA);
   check("auth challenge issued", chA.status === 200);
   const ctxA = buildContext("auth", {
-    challengeId: chA.body.challenge_id,
-    nonce: chA.body.nonce,
+    challengeId: chA.res.body.challenge_id,
+    nonce: chA.res.body.nonce,
     accountId: reg.body.account_id,
     deviceId: device1,
   });
   const sigA = await signB64(priv1, ctxA);
-  const verifyA = await http("POST", "/auth/verify", { body: { challenge_id: chA.body.challenge_id, signature: sigA } });
+  const verifyA = await http("POST", "/auth/verify", {
+    body: { challenge_id: chA.res.body.challenge_id, signature: sigA },
+    ip: "203.0.113.10",
+  });
   stepLog("auth verify", verifyA);
   check(
     "auth verify issued a second token",
@@ -165,11 +223,12 @@ async function main() {
       auth_pub: pub2,
       authorizer_device_id: device1,
     },
+    ip: "203.0.113.10",
   });
   check("add_device challenge issued", chD.status === 200);
   const ctxD = buildContext("add_device", {
-    challengeId: chD.body.challenge_id,
-    nonce: chD.body.nonce,
+    challengeId: chD.res.body.challenge_id,
+    nonce: chD.res.body.nonce,
     username,
     identityPubB64: identity2,
     authPubB64: pub2,
@@ -177,65 +236,74 @@ async function main() {
   });
   const sigNew = await signB64(priv2, ctxD);
   const sigAuth = await signB64(priv1, ctxD);
-  const add = await http("POST", "/devices", { body: { challenge_id: chD.body.challenge_id, signature: sigNew, authorizer_signature: sigAuth, registration_id: 1001 } });
+  const add = await http("POST", "/devices", {
+    body: {
+      challenge_id: chD.res.body.challenge_id,
+      signature: sigNew,
+      authorizer_signature: sigAuth,
+      registration_id: 1001,
+    },
+    ip: "203.0.113.10",
+  });
   stepLog("add device", add);
   check("second device added (dev_no=2)", add.status === 201 && add.body.dev_no === 2);
   const device2 = add.body.device_id;
 
-  const me2 = await http("GET", "/devices/me", { token: add.body.token });
+  const me2 = await http("GET", "/devices/me", { token: add.body.token, ip: "203.0.113.10" });
+  stepLog("devices/me with device2 token", me2);
   check("second device token works", me2.status === 200 && me2.body.dev_no === 2);
 
-  // 6) cross-account revoke is forbidden
+  // 6) second account (for cross-account authorization test)
   const { priv: privB, pubB64: pubB } = await genKey();
   const usernameB = `smoke_b_${runStart}`;
-  const chB = await http("POST", "/auth/challenge", {
-    body: { purpose: "register", username: usernameB, identity_pub: b64(crypto.getRandomValues(new Uint8Array(32))), auth_pub: pubB },
-  });
-  const ctxB = buildContext("register", {
-    challengeId: chB.body.challenge_id,
-    nonce: chB.body.nonce,
-    username: usernameB,
-    identityPubB64: chB.identityPubB64,
-    authPubB64: pubB,
-  });
-  const sigB = await signB64(privB, ctxB);
-  const regB = await http("POST", "/accounts", { body: { challenge_id: chB.body.challenge_id, signature: sigB, registration_id: 1000 } });
-  stepLog("register accountB", regB);
-  check("second account registered", regB.status === 201);
-  const cross = await http("DELETE", `/devices/${device1}`, { token: regB.body.token });
-  stepLog("cross revoke", cross);
-  check("cross-account revoke forbidden (403)", cross.status === 403 && cross.body.error.code === "FORBIDDEN");
+  const accB = await registerAccount(usernameB, "203.0.113.11");
+  check("second account registered", !!accB);
 
-  // 7) revoke device2 with device1's token â†’ both token and device invalidated
-  const del = await http("DELETE", `/devices/${device2}`, { token: token1 });
+  // 7) cross-account revoke is forbidden
+  if (accB) {
+    const cross = await http("DELETE", `/devices/${device1}`, { token: accB.token, ip: "203.0.113.11" });
+    stepLog("cross revoke", cross);
+    check("cross-account revoke forbidden (403)", cross.status === 403 && cross.body.error.code === "FORBIDDEN");
+  }
+
+  // 8) revoke device2 with device1's token → token invalidated immediately
+  const del = await http("DELETE", `/devices/${device2}`, { token: token1, ip: "203.0.113.10" });
   stepLog("revoke device2", del);
   check("device2 revoked (204)", del.status === 204);
-  const meAfter = await http("GET", "/devices/me", { token: add.body.token });
-  stepLog("me after revoke", meAfter);
+  const meAfter = await http("GET", "/devices/me", { token: add.body.token, ip: "203.0.113.10" });
+  stepLog("devices/me after revoke", meAfter);
   check(
     "revoked device token immediately invalid (401 DEVICE_REVOKED)",
     meAfter.status === 401 && meAfter.body.error.code === "DEVICE_REVOKED",
   );
-  const chAfter = await http("POST", "/auth/challenge", { body: { purpose: "auth", device_id: device2 } });
+  const chAfter = await http("POST", "/auth/challenge", {
+    body: { purpose: "auth", device_id: device2 },
+    ip: "203.0.113.10",
+  });
   stepLog("challenge after revoke", chAfter);
   check("revoked device cannot obtain a challenge (404, fail-closed)", chAfter.status === 404);
 
-  // 8) real token expiry on Cloudflare (staging TTL)
+  // 9) real token expiry on Cloudflare (staging TTL)
+  const token1Expires = reg.body.token_expires_at;
   const wait = Math.max(0, token1Expires - Date.now()) + 1500;
   console.log(`[INFO] waiting ${wait}ms for real token expiry on Cloudflare`);
   await sleep(wait);
-  const meExpired = await http("GET", "/devices/me", { token: token1 });
-  stepLog("me after expiry", meExpired);
+  const meExpired = await http("GET", "/devices/me", { token: token1, ip: "203.0.113.10" });
+  stepLog("devices/me after expiry", meExpired);
   check(
     "token really expires on Cloudflare (401 TOKEN_EXPIRED)",
     meExpired.status === 401 && meExpired.body.error.code === "TOKEN_EXPIRED",
   );
 
-  console.log(failures === 0 ? "\nALL SMOKE TESTS PASSED" : `\n${failures} SMOKE TEST(S) FAILED`);
+  if (failures > 0) {
+    console.error(`[SUMMARY] ${failures} SMOKE TEST(S) FAILED`);
+    for (const s of steps) console.error(`[STEPS] ${s}`);
+  }
   process.exit(failures === 0 ? 0 : 1);
 }
 
 main().catch((e) => {
-  console.error("smoke test crashed:", e);
+  console.error("smoke test crashed:", e && e.message ? e.message : e);
+  for (const s of steps) console.error(`[STEPS] ${s}`);
   process.exit(1);
 });
