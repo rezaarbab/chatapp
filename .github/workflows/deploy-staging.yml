@@ -88,7 +88,19 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           npx wrangler deploy --config wrangler.staging.jsonc | tee deploy.log
-          url=$(grep -oE 'https://[a-z0-9-]+\.workers\.dev' deploy.log | head -1)
+          sed 's/\x1b\[[0-9;]*m//g' deploy.log > deploy-clean.log
+          url=$(grep -oE 'https://[a-z0-9-]+\.workers\.dev' deploy-clean.log | head -1)
+          if [ -z "$url" ]; then
+            sub=$(curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/subdomain" \
+              | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{const j=JSON.parse(d);console.log(j.result.subdomain||'')}catch{console.log('')}})")
+            if [ -n "$sub" ]; then url="https://chatapp-staging.$sub.workers.dev"; fi
+          fi
+          if [ -z "$url" ]; then
+            echo "::error::could not determine staging URL"
+            tail -n 20 deploy-clean.log
+            exit 1
+          fi
           echo "url=$url" >> "$GITHUB_OUTPUT"
           echo "staging url: $url"
       - name: Run real-Cloudflare smoke tests
@@ -97,4 +109,7 @@ jobs:
         env:
           STAGING_URL: ${{ steps.deploy.outputs.url }}
           STAGING_TOKEN_TTL_MS: "20000"
-        run: node test/smoke-staging.mjs
+        run: |
+          set -o pipefail
+          node test/smoke-staging.mjs 2>&1 | tee smoke.log || true
+          grep -q "ALL SMOKE TESTS PASSED" smoke.log || { grep -E "FAIL|crashed" smoke.log | head -n 10 | while IFS= read -r l; do echo "::error::SMOKE: $(printf '%.320s' "$l")"; done; exit 1; }
