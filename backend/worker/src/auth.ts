@@ -26,6 +26,7 @@ export interface ChallengeRecord {
   username: string | null;
   identity_pub: string | null;
   auth_pub: string | null;
+  authorizer_device_id: string | null;
   issued_at: number;
   expires_at: number;
   used_at: number | null;
@@ -144,6 +145,7 @@ async function getChallenge(db: D1Database, challengeId: string): Promise<Challe
     username: (row.username as string | null) ?? null,
     identity_pub: (row.identity_pub as string | null) ?? null,
     auth_pub: (row.auth_pub as string | null) ?? null,
+    authorizer_device_id: (row.authorizer_device_id as string | null) ?? null,
     issued_at: row.issued_at as number,
     expires_at: row.expires_at as number,
     used_at: (row.used_at as number | null) ?? null,

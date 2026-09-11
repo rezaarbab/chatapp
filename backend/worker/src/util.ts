@@ -23,6 +23,11 @@ export function asBytes(v: unknown): Uint8Array {
   if (v && typeof (v as ArrayBufferView).buffer === "object") {
     return new Uint8Array((v as ArrayBufferView).buffer);
   }
+  if (Array.isArray(v)) return Uint8Array.from(v as number[]);
+  if (v && typeof v === "object") {
+    const o = v as Record<string, unknown>;
+    if (Array.isArray(o.data)) return Uint8Array.from(o.data as number[]);
+  }
   throw new Error("unsupported binary shape returned by D1");
 }
 
