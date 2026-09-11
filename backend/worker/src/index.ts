@@ -1,7 +1,12 @@
-import type { Env } from "./env";
+import { handleRequest } from "./router";
+
+interface Env {
+  DB: D1Database;
+  NOW_OVERRIDE_MS?: string;
+}
 
 export default {
-  async fetch(_request: Request, _env: Env): Promise<Response> {
-    return new Response("chatapp worker", { status: 200 });
+  async fetch(request: Request, env: Env): Promise<Response> {
+    return handleRequest(request, env);
   },
 };
