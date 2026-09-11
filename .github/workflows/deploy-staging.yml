@@ -121,7 +121,8 @@ jobs:
           sleep 3
           echo "captured tail: $(wc -l < tail.log 2>/dev/null || echo 0) lines"
           if ! grep -q "ALL SMOKE TESTS PASSED" smoke.log; then
-            grep -E "\[STEP\]|\[SUMMARY\]|crashed|TimeoutError|AbortError|Error:" smoke.log | head -n 12 | while IFS= read -r l; do echo "::error::SMOKE: $(printf '%.300s' "$l")"; done
+            grep "\[DEBUG500\]" smoke.log | head -n 4 | while IFS= read -r l; do echo "::error::DEBUG500: $(printf '%.1000s' "$l")"; done
+            grep -cE "\[STEP\]" smoke.log | while IFS= read -r l; do echo "::error::steps completed: $l"; done
             exit 1
           fi
       - name: Dump wrangler tail on failure
