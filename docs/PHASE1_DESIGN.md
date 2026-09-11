@@ -543,3 +543,20 @@ await crypto.subtle.digest("SHA-256", tokenBytes);
 Client (Android, Option B): Tink `Signature` primitive `ED25519_SIGN` —
 64-byte raw signatures per RFC 8032 (verified compatible with the above).
 No DER, no P1363 conversion, no custom verification code.
+
+---
+
+## 15. Phase 1 implementation notes (as-built)
+
+- Migration 0007_rate_limits.sql adds the strict fixed-window rate_limits table
+  (atomic upsert + RETURNING) and auth_challenges.authorizer_device_id
+  (co-signer identity for add_device, stored server-side).
+- Contracts update: POST /accounts and POST /devices carry a client-generated
+  registration_id (1..16380, validated server-side); username format is
+  [A-Za-z0-9_-]{1,64} (case-sensitive).
+- Token = raw 256-bit random, returned once, stored as SHA-256(token);
+  TTL 30 min; revocation = atomic D1 batch over the device row + all its tokens.
+- Test hook: NOW_OVERRIDE_MS env var overrides server time (used only by CI
+  tests for deterministic expiry/window tests; unset in production).
+- Runner note: the emulator-runner script env does NOT carry ANDROID_HOME -
+  the adb path is persisted from the build step (adb-path.txt).
