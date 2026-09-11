@@ -51,10 +51,11 @@ async function signB64(priv, message) {
 async function http(method, path, { body, token } = {}) {
   const headers = { "content-type": "application/json" };
   if (token) headers.authorization = `Bearer ${token}`;
-  const res = await fetch(`${BASE}${path}`, {
+  const res = await fetch(``, {
     method,
     headers,
     body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(15000),
   });
   let json = {};
   if (res.status !== 204) {
@@ -80,7 +81,7 @@ function buildContext(purpose, c) {
 async function waitUntilReachable() {
   for (let attempt = 1; attempt <= 10; attempt++) {
     try {
-      const res = await fetch(`${BASE}/devices/me`, { method: "GET" });
+      const res = await fetch(`${BASE}/devices/me`, { method: "GET", signal: AbortSignal.timeout(15000) });
       if (res.status === 401) return; // worker is up (auth expected)
     } catch {
       // not ready yet

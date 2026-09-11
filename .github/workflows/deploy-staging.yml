@@ -106,6 +106,7 @@ jobs:
       - name: Run real-Cloudflare smoke tests
         if: steps.guard.outputs.enabled == 'true'
         working-directory: backend/worker
+        timeout-minutes: 6
         env:
           STAGING_URL: ${{ steps.deploy.outputs.url }}
           STAGING_TOKEN_TTL_MS: "20000"
