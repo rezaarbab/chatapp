@@ -196,14 +196,14 @@ async function main() {
   stepLog("auth challenge", chA);
   check("auth challenge issued", chA.status === 200);
   const ctxA = buildContext("auth", {
-    challengeId: chA.res.body.challenge_id,
-    nonce: chA.res.body.nonce,
+    challengeId: chA.body.challenge_id,
+    nonce: chA.body.nonce,
     accountId: reg.body.account_id,
     deviceId: device1,
   });
   const sigA = await signB64(priv1, ctxA);
   const verifyA = await http("POST", "/auth/verify", {
-    body: { challenge_id: chA.res.body.challenge_id, signature: sigA },
+    body: { challenge_id: chA.body.challenge_id, signature: sigA },
     ip: "203.0.113.10",
   });
   stepLog("auth verify", verifyA);
@@ -227,8 +227,8 @@ async function main() {
   });
   check("add_device challenge issued", chD.status === 200);
   const ctxD = buildContext("add_device", {
-    challengeId: chD.res.body.challenge_id,
-    nonce: chD.res.body.nonce,
+    challengeId: chD.body.challenge_id,
+    nonce: chD.body.nonce,
     username,
     identityPubB64: identity2,
     authPubB64: pub2,
@@ -238,7 +238,7 @@ async function main() {
   const sigAuth = await signB64(priv1, ctxD);
   const add = await http("POST", "/devices", {
     body: {
-      challenge_id: chD.res.body.challenge_id,
+      challenge_id: chD.body.challenge_id,
       signature: sigNew,
       authorizer_signature: sigAuth,
       registration_id: 1001,
