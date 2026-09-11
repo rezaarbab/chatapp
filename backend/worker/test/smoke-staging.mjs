@@ -102,7 +102,7 @@ async function waitUntilReachable() {
         signal: AbortSignal.timeout(15000),
       });
       console.log(`[REACH] attempt ${attempt}: status=${res.status}`);
-      if (res.status === 401) return; // worker is up (auth expected)
+      return; // any HTTP response means the worker is routed and alive
     } catch (e) {
       console.log(`[REACH] attempt ${attempt} failed: ${e && e.message ? e.message : e}`);
     }
