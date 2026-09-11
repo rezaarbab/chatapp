@@ -118,8 +118,8 @@ jobs:
             echo "::error::smoke.log is empty — node produced no output"
           fi
           if ! grep -q "ALL SMOKE TESTS PASSED" smoke.log; then
-            grep -E "STEP|PASS|FAIL|never|crashed" smoke.log | head -n 30 | while IFS= read -r l; do echo "::error::SMOKE: $(printf '%.320s' "$l")"; done
-            if ! grep -qE "STEP|PASS|FAIL" smoke.log; then
+            grep -E "\[STEP\]|\[SUMMARY\]" smoke.log | head -n 12 | while IFS= read -r l; do echo "::error::SMOKE: $(printf '%.300s' "$l")"; done
+            if ! grep -qE "\[STEP\]" smoke.log; then
               tail -n 10 smoke.log | while IFS= read -r l; do echo "::error::SMOKE-RAW: $(printf '%.320s' "$l")"; done
             fi
             exit 1
