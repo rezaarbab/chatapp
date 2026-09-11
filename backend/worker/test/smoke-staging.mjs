@@ -94,15 +94,17 @@ function buildContext(purpose, c) {
 }
 
 async function waitUntilReachable() {
+  console.log(`::warning::STAGING_URL=${BASE}`);
   for (let attempt = 1; attempt <= 10; attempt++) {
     try {
       const res = await fetch(BASE + "/devices/me", {
         method: "GET",
         signal: AbortSignal.timeout(15000),
       });
+      console.log(`[REACH] attempt ${attempt}: status=${res.status}`);
       if (res.status === 401) return; // worker is up (auth expected)
-    } catch {
-      // not ready yet
+    } catch (e) {
+      console.log(`[REACH] attempt ${attempt} failed: ${e && e.message ? e.message : e}`);
     }
     await sleep(3000);
   }
