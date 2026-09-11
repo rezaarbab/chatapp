@@ -11,6 +11,21 @@ export function b64ToBytes(b64: string): Uint8Array {
   return out;
 }
 
+/**
+ * Normalizes D1 BLOB reads. Real D1 and miniflare return BLOB columns in
+ * different shapes (ArrayBuffer vs Uint8Array); this makes the Worker
+ * environment-agnostic without touching the crypto layer.
+ */
+export function asBytes(v: unknown): Uint8Array {
+  if (v instanceof Uint8Array) return v;
+  if (v instanceof ArrayBuffer) return new Uint8Array(v);
+  if (typeof v === "string") return b64ToBytes(v);
+  if (v && typeof (v as ArrayBufferView).buffer === "object") {
+    return new Uint8Array((v as ArrayBufferView).buffer);
+  }
+  throw new Error("unsupported binary shape returned by D1");
+}
+
 export function bytesToHex(bytes: Uint8Array): string {
   return [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
 }

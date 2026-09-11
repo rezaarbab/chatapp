@@ -1,6 +1,6 @@
-import { HttpError, errorResponse, jsonResponse } from "./errors";
+﻿import { HttpError, errorResponse, jsonResponse } from "./errors";
 import { checkRateLimit, LIMITS } from "./ratelimit";
-import { b64ToBytes, bytesToB64, sha256 } from "./util";
+import { asBytes, b64ToBytes, bytesToB64, sha256 } from "./util";
 import { authenticate } from "./tokens";
 import { addDeviceWithToken, createAccountWithDevice, revokeDevice } from "./devices";
 import { buildContext, consumeChallenge, createChallenge, verifyEd25519 } from "./auth";
@@ -250,7 +250,7 @@ const handleVerify: Handler = async (ctx) => {
     accountId: consumed.row.account_id,
     deviceId: consumed.row.device_id,
   });
-  const ok = await verifyEd25519(device.auth_pub_key, signature, new TextEncoder().encode(context));
+  const ok = await verifyEd25519(asBytes(device.auth_pub_key), signature, new TextEncoder().encode(context));
   if (!ok) throw new HttpError(401, "INVALID_SIGNATURE", "challenge signature invalid");
 
   const tokenTtl = Number(env.TOKEN_TTL_MS) > 0 ? Number(env.TOKEN_TTL_MS) : undefined;

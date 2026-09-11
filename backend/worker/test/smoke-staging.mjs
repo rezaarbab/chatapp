@@ -105,7 +105,7 @@ async function main() {
     body: { purpose: "register", username, identity_pub: identity1, auth_pub: pub1 },
   });
   check("challenge issued (register)", ch1.status === 200 && !!ch1.body.challenge_id && ch1.body.nonce.length === 64);
-  const token1Expires = ch1.body.expires_at + 20000; // server-stamped, TTL = staging var
+  void ch1;
   const ctx1 = buildContext("register", {
     challengeId: ch1.body.challenge_id,
     nonce: ch1.body.nonce,
@@ -114,9 +114,8 @@ async function main() {
     authPubB64: pub1,
   });
   const sig1 = await signB64(priv1, ctx1);
-  const reg = await http("POST", "/accounts", {
-    body: { challenge_id: ch1.body.challenge_id, signature: sig1, registration_id: 1000 },
-  });
+  const reg = await http("POST", "/accounts", { body: { challenge_id: ch1.body.challenge_id, signature: sig1, registration_id: 1000 } });
+  const token1Expires = reg.body.token_expires_at; // real token expiry from the server
   check("account registered (201)", reg.status === 201 && !!reg.body.account_id && !!reg.body.device_id && reg.body.dev_no === 1);
   const token1 = reg.body.token;
   const device1 = reg.body.device_id;
@@ -195,7 +194,7 @@ async function main() {
     challengeId: chB.body.challenge_id,
     nonce: chB.body.nonce,
     username: usernameB,
-    identityPubB64: b64(crypto.getRandomValues(new Uint8Array(32))),
+    identityPubB64: chB.identityPubB64,
     authPubB64: pubB,
   });
   const sigB = await signB64(privB, ctxB);
