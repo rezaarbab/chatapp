@@ -1,7 +1,7 @@
 ﻿import { HttpError, errorResponse, jsonResponse } from "./errors";
 import { checkRateLimit, LIMITS } from "./ratelimit";
 import { asBytes, b64ToBytes, bytesToB64, sha256 } from "./util";
-import { authenticate } from "./tokens";
+import { authenticate, issueToken } from "./tokens";
 import { addDeviceWithToken, createAccountWithDevice, revokeDevice } from "./devices";
 import { buildContext, consumeChallenge, createChallenge, verifyEd25519 } from "./auth";
 
