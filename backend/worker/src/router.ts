@@ -23,6 +23,7 @@ interface Ctx {
   url: URL;
   db: D1Database;
   now: number;
+  tokenTtlMs: number;
   ipHash: string;
   authorization: string | null;
   body: unknown;
@@ -158,6 +159,7 @@ const handleAuthChallenge: Handler = async (ctx) => {
       deviceId,
       identityPubB64: identityPub,
       authPubB64: authPub,
+      authorizerDeviceId,
     },
     ctx.now,
   );
@@ -254,8 +256,7 @@ const handleVerify: Handler = async (ctx) => {
   const ok = await verifyEd25519(asBytes(device.auth_pub_key), signature, new TextEncoder().encode(context));
   if (!ok) throw new HttpError(401, "INVALID_SIGNATURE", "challenge signature invalid");
 
-  const tokenTtl = Number(env.TOKEN_TTL_MS) > 0 ? Number(env.TOKEN_TTL_MS) : undefined;
-  const { token, token_expires_at } = await issueToken(ctx.db, consumed.row.device_id, ctx.now, tokenTtl);
+  const { token, token_expires_at } = await issueToken(ctx.db, consumed.row.device_id, ctx.now, ctx.tokenTtlMs);
   return jsonResponse({
     token,
     account_id: consumed.row.account_id,
@@ -434,6 +435,7 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
       url,
       db: env.DB,
       now,
+      tokenTtlMs: Number(env.TOKEN_TTL_MS) > 0 ? Number(env.TOKEN_TTL_MS) : 30 * 60 * 1000,
       ipHash,
       authorization: request.headers.get("Authorization"),
       body,

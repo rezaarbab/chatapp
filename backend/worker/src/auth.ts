@@ -111,8 +111,8 @@ export async function createChallenge(
   await db
     .prepare(
       `INSERT INTO auth_challenges
-         (challenge_id, nonce, purpose, account_id, device_id, username, identity_pub, auth_pub, issued_at, expires_at)
-       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`,
+         (challenge_id, nonce, purpose, account_id, device_id, username, identity_pub, auth_pub, authorizer_device_id, issued_at, expires_at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)`,
     )
     .bind(
       challengeId,
@@ -123,6 +123,7 @@ export async function createChallenge(
       input.username ?? null,
       input.identityPubB64 ?? null,
       input.authPubB64 ?? null,
+      input.authorizerDeviceId ?? null,
       now,
       expiresAt,
     )
