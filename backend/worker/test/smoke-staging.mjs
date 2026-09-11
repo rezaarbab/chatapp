@@ -77,9 +77,7 @@ async function http(method, path, opts = {}) {
     }
   }
   const code = json && json.error ? json.error.code : "";
-  const line = `[HTTP] ${method} ${path} -> ${res.status} ${code}`;
-  console.log(line);
-  console.log(`::warning::${line}`);
+  console.log(`[HTTP] ${method} ${path} -> ${res.status} ${code}`);
   return { status: res.status, body: json };
 }
 
