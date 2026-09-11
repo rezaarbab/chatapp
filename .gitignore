@@ -9,3 +9,13 @@ captures/
 externalNativeBuild/
 node_modules/
 tink-fixture.json
+wrangler.staging.jsonc
+wrangler.production.jsonc
+d1list.json
+adb-path.txt
+android-build.log
+npm-install.log
+worker-tests.log
+android-test.log
+interop-test.log
+test-output.txt
