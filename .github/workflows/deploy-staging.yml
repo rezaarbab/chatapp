@@ -1,9 +1,9 @@
-name: deploy-staging
+﻿name: deploy-staging
 
 # Deploys the Worker + D1 to the STAGING environment and runs real-Cloudflare
 # smoke tests. Requires two GitHub Actions secrets (never committed):
-#   CLOUDFLARE_API_TOKEN  — API token with D1:Edit + Workers Scripts:Edit
-#   CLOUDFLARE_ACCOUNT_ID — account identifier (not a secret, kept out of git anyway)
+#   CLOUDFLARE_API_TOKEN  â€” API token with D1:Edit + Workers Scripts:Edit
+#   CLOUDFLARE_ACCOUNT_ID â€” account identifier (not a secret, kept out of git anyway)
 # Until both are configured, this job skips itself.
 
 on:
@@ -29,7 +29,7 @@ jobs:
           if [ -n "$CF_TOKEN" ] && [ -n "$CF_ACCOUNT" ]; then
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           else
-            echo "::warning::CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID not configured — staging deploy skipped"
+            echo "::warning::CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID not configured â€” staging deploy skipped"
             echo "enabled=false" >> "$GITHUB_OUTPUT"
           fi
       - name: Install worker deps

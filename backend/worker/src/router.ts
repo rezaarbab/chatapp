@@ -9,6 +9,7 @@ interface Env {
   DB: D1Database;
   NOW_OVERRIDE_MS?: string;
   TOKEN_TTL_MS?: string; // staging/test override; production keeps the 30-min default
+  DEBUG_ERRORS?: string; // staging only: include exception detail in 500 responses
 }
 
 interface AuthInfo {
@@ -426,6 +427,12 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
     };
     return await match.handler(ctx, params);
   } catch (e) {
+    if (env.DEBUG_ERRORS === "true" && e instanceof Error) {
+      return jsonResponse(
+        { error: { code: "INTERNAL", message: e.message, stack: (e.stack || "").slice(0, 1500) } },
+        500,
+      );
+    }
     return errorResponse(e);
   }
 }

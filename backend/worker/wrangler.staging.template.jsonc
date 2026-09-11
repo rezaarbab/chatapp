@@ -5,7 +5,9 @@
   "vars": {
     // staging-only: short token TTL so the smoke test can verify real expiry.
     // Production config intentionally omits this (30-minute default).
-    "TOKEN_TTL_MS": "20000"
+    "TOKEN_TTL_MS": "20000",
+    // staging-only: include exception details in 500 responses for debugging.
+    "DEBUG_ERRORS": "true"
   },
   "d1_databases": [
     {

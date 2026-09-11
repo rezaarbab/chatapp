@@ -38,6 +38,10 @@ function stepLog(name, res) {
   const line = `[STEP] ${name} status=${res.status} ${code} ${JSON.stringify(res.body).slice(0, 160)}`;
   steps.push(line);
   console.log(line);
+  if (res.status >= 500) {
+    // staging DEBUG_ERRORS mode: the body carries the server exception + stack
+    console.log(`[DEBUG500] ${name} ${JSON.stringify(res.body)}`);
+  }
 }
 
 function b64(bytes) {
