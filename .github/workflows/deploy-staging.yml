@@ -1,0 +1,100 @@
+name: deploy-staging
+
+# Deploys the Worker + D1 to the STAGING environment and runs real-Cloudflare
+# smoke tests. Requires two GitHub Actions secrets (never committed):
+#   CLOUDFLARE_API_TOKEN  — API token with D1:Edit + Workers Scripts:Edit
+#   CLOUDFLARE_ACCOUNT_ID — account identifier (not a secret, kept out of git anyway)
+# Until both are configured, this job skips itself.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy-staging:
+    runs-on: ubuntu-latest
+    outputs:
+      enabled: ${{ steps.guard.outputs.enabled }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - id: guard
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -n "$CF_TOKEN" ] && [ -n "$CF_ACCOUNT" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID not configured — staging deploy skipped"
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Install worker deps
+        if: steps.guard.outputs.enabled == 'true'
+        working-directory: backend/worker
+        run: npm install --legacy-peer-deps --no-fund --no-audit > npm-install.log 2>&1 || { tail -n 25 npm-install.log; exit 1; }
+      - name: Create D1 staging database (idempotent)
+        if: steps.guard.outputs.enabled == 'true'
+        working-directory: backend/worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npx wrangler d1 list --json > d1list.json || echo "[]" > d1list.json
+          if ! grep -q '"name": "chatapp-staging"' d1list.json; then
+            npx wrangler d1 create chatapp-staging
+          fi
+          npx wrangler d1 list --json > d1list.json
+          node -e "const l=require('./d1list.json');const d=l.find(x=>x.name==='chatapp-staging');if(!d)process.exit(1);console.log(d.uuid)" > d1-id.txt
+          echo "D1 database: $(cat d1-id.txt)"
+      - name: Render staging config
+        if: steps.guard.outputs.enabled == 'true'
+        working-directory: backend/worker
+        run: |
+          sed "s/__D1_DATABASE_ID__/$(cat d1-id.txt)/" wrangler.staging.template.jsonc > wrangler.staging.jsonc
+          echo "config rendered (database id not committed to git)"
+      - name: Apply migrations to real staging D1
+        if: steps.guard.outputs.enabled == 'true'
+        working-directory: backend/worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: npx wrangler d1 migrations apply chatapp-staging --remote --config wrangler.staging.jsonc
+      - name: Verify migrations landed on real D1
+        if: steps.guard.outputs.enabled == 'true'
+        working-directory: backend/worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npx wrangler d1 execute chatapp-staging --remote --config wrangler.staging.jsonc --json --command "SELECT name FROM sqlite_master WHERE type='table'" > tables.json
+          node -e "
+            const out = require('./tables.json');
+            const tables = (out[0].results || []).map(r => r.name);
+            const need = ['accounts','devices','signed_prekeys','one_time_prekeys','kyber_prekeys','message_queue','attachments','attachment_delivery','backups','auth_challenges','auth_tokens','rate_limits'];
+            const missing = need.filter(t => !tables.includes(t));
+            if (missing.length) { console.error('missing tables:', missing); process.exit(1); }
+            console.log('all 12 tables present on real D1');
+          "
+      - name: Deploy Worker to staging
+        if: steps.guard.outputs.enabled == 'true'
+        working-directory: backend/worker
+        id: deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          npx wrangler deploy --config wrangler.staging.jsonc | tee deploy.log
+          url=$(grep -oE 'https://[a-z0-9-]+\.workers\.dev' deploy.log | head -1)
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "staging url: $url"
+      - name: Run real-Cloudflare smoke tests
+        if: steps.guard.outputs.enabled == 'true'
+        working-directory: backend/worker
+        env:
+          STAGING_URL: ${{ steps.deploy.outputs.url }}
+          STAGING_TOKEN_TTL_MS: "20000"
+        run: node test/smoke-staging.mjs

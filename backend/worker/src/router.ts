@@ -8,6 +8,7 @@ import { buildContext, consumeChallenge, createChallenge, verifyEd25519 } from "
 interface Env {
   DB: D1Database;
   NOW_OVERRIDE_MS?: string;
+  TOKEN_TTL_MS?: string; // staging/test override; production keeps the 30-min default
 }
 
 interface AuthInfo {
@@ -252,7 +253,8 @@ const handleVerify: Handler = async (ctx) => {
   const ok = await verifyEd25519(device.auth_pub_key, signature, new TextEncoder().encode(context));
   if (!ok) throw new HttpError(401, "INVALID_SIGNATURE", "challenge signature invalid");
 
-  const { token, token_expires_at } = await issueToken(ctx.db, consumed.row.device_id, ctx.now);
+  const tokenTtl = Number(env.TOKEN_TTL_MS) > 0 ? Number(env.TOKEN_TTL_MS) : undefined;
+  const { token, token_expires_at } = await issueToken(ctx.db, consumed.row.device_id, ctx.now, tokenTtl);
   return jsonResponse({
     token,
     account_id: consumed.row.account_id,
