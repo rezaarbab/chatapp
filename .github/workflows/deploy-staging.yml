@@ -113,7 +113,14 @@ jobs:
         run: |
           set -o pipefail
           node test/smoke-staging.mjs 2>&1 | tee smoke.log || true
+          echo "--- smoke.log size: $(wc -c < smoke.log 2>/dev/null || echo 0) bytes, lines: $(wc -l < smoke.log 2>/dev/null || echo 0)"
+          if [ ! -s smoke.log ]; then
+            echo "::error::smoke.log is empty — node produced no output"
+          fi
           if ! grep -q "ALL SMOKE TESTS PASSED" smoke.log; then
-            grep -E "STEP|PASS|FAIL" smoke.log | head -n 30 | while IFS= read -r l; do echo "::error::SMOKE: $(printf '%.320s' "$l")"; done
+            grep -E "STEP|PASS|FAIL|never|crashed" smoke.log | head -n 30 | while IFS= read -r l; do echo "::error::SMOKE: $(printf '%.320s' "$l")"; done
+            if ! grep -qE "STEP|PASS|FAIL" smoke.log; then
+              tail -n 10 smoke.log | while IFS= read -r l; do echo "::error::SMOKE-RAW: $(printf '%.320s' "$l")"; done
+            fi
             exit 1
           fi
