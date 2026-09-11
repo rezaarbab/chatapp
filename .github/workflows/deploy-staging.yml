@@ -135,6 +135,6 @@ jobs:
             echo "::error::tail.log empty or missing"
           fi
           if ! grep -q "ALL SMOKE TESTS PASSED" smoke.log; then
-            grep -E "\[HTTP\]|\[STEP\]|\[SUMMARY\]|crashed|TimeoutError|AbortError" smoke.log | head -n 12 | while IFS= read -r l; do echo "::error::SMOKE: $(printf '%.300s' "$l")"; done
+            tail -n 13 smoke.log | while IFS= read -r l; do echo "::error::SMOKE: $(printf '%.300s' "$l")"; done
             exit 1
           fi
