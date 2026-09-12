@@ -328,7 +328,9 @@ async function main() {
 }
 
 main().catch((e) => {
-  console.error("smoke test crashed:", e && e.message ? e.message : e);
+  const msg = e && e.message ? e.message : String(e);
+  console.error(`::error::smoke test crashed: ${msg.slice(0, 800)}`);
+  console.error(`smoke test crashed: ${msg}`);
   for (const s of steps) console.error(`[STEPS] ${s}`);
   process.exit(1);
 });
