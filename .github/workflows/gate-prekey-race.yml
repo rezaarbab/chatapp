@@ -63,6 +63,15 @@ jobs:
           cat > gate/src/index.js <<'EOF'
           export default {
             async fetch(req, env) {
+              try {
+                return await handle(req, env);
+              } catch (e) {
+                return Response.json({ error: String(e && e.message || e) }, { status: 500 });
+              }
+            },
+          };
+
+          async function handle(req, env) {
               const url = new URL(req.url);
               if (req.method === "GET" && url.pathname === "/health") {
                 return Response.json({ ok: true, worker: "gate-race" });
@@ -92,15 +101,26 @@ jobs:
               if (req.method === "POST" && url.pathname === "/pop-cas") {
                 // Phase 2 design algorithm: SELECT lowest unused, then CONDITIONAL UPDATE
                 // (compare-and-swap on used_at IS NULL); meta.changes decides ownership.
+                // Transient D1 errors (e.g. SQLITE_BUSY under burst) burn an attempt and retry.
                 const now = Date.now();
                 for (let attempt = 1; attempt <= 15; attempt++) {
-                  const row = await env.DB.prepare(
-                    "SELECT key_id FROM gate_race_prekeys WHERE device_id = 'dev1' AND used_at IS NULL ORDER BY key_id LIMIT 1"
-                  ).first();
+                  let row;
+                  try {
+                    row = await env.DB.prepare(
+                      "SELECT key_id FROM gate_race_prekeys WHERE device_id = 'dev1' AND used_at IS NULL ORDER BY key_id LIMIT 1"
+                    ).first();
+                  } catch (e) {
+                    continue; // transient D1 error -> retry
+                  }
                   if (!row) return Response.json({ key_id: null, attempt });
-                  const res = await env.DB.prepare(
-                    "UPDATE gate_race_prekeys SET used_at = ?1 WHERE device_id = 'dev1' AND key_id = ?2 AND used_at IS NULL"
-                  ).bind(now, row.key_id).run();
+                  let res;
+                  try {
+                    res = await env.DB.prepare(
+                      "UPDATE gate_race_prekeys SET used_at = ?1 WHERE device_id = 'dev1' AND key_id = ?2 AND used_at IS NULL"
+                    ).bind(now, row.key_id).run();
+                  } catch (e) {
+                    continue; // transient D1 error -> retry (CAS guard keeps this safe)
+                  }
                   if (res.meta.changes === 1) return Response.json({ key_id: row.key_id, attempt });
                 }
                 return Response.json({ key_id: null, exhausted: true });
@@ -117,8 +137,7 @@ jobs:
                 return Response.json({ key_id: row.key_id });
               }
               return new Response("not found", { status: 404 });
-            },
-          };
+          }
           EOF
           (cd gate && npx wrangler deploy 2>&1 | tee ../deploy.log)
           URL="$(grep -oE 'https://[a-zA-Z0-9.-]+\.workers\.dev' deploy.log | head -n 1)"
@@ -162,6 +181,7 @@ jobs:
             const line = `[${mode}] round=${roundNo} delivered=${keys.length} distinct=${distinct.size} duplicates=${dup} nulls=${nulls} maxRetry=${maxRetry} transportErrors=${errors.length}`;
             console.log(line);
             for (const e of errors.slice(0, 3)) console.log(`[ERRSAMPLE] ${JSON.stringify(e).slice(0, 250)}`);
+            await new Promise((res) => setTimeout(res, 1500)); // drain stragglers before next reset
             return { keys, dup, nulls, distinctSize: distinct.size, transportErrors: errors.length, line };
           }
 
