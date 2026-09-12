@@ -10,6 +10,7 @@
 
 const BASE = (process.env.STAGING_URL || "").replace(/\/+$/, "");
 const TOKEN_TTL_MS = Number(process.env.STAGING_TOKEN_TTL_MS || 30000);
+const SMOKE_MODE = process.env.SMOKE_MODE || "full"; // "full" | "repro"
 
 if (!BASE) {
   console.error("STAGING_URL is required");
@@ -170,7 +171,72 @@ const watchdog = setTimeout(() => {
   process.exit(1);
 }, WATCHDOG_MS);
 
+
+async function minimalRepro() {
+  const username = `repro_${Date.now()}`;
+  console.log(`::warning::[REPRO] START marker username=${username} — search this in Real-time Logs`);
+  const { priv, pubB64 } = await genKey();
+  const identityPubB64 = b64(crypto.getRandomValues(new Uint8Array(32)));
+
+  console.log("[REPRO] 1/4 POST /auth/challenge (register)...");
+  const ch = await http("POST", "/auth/challenge", {
+    body: { purpose: "register", username, identity_pub: identityPubB64, auth_pub: pubB64 },
+    ip: "198.51.100.7",
+  });
+  console.log(`[REPRO] 1/4 done: ${ch.status}`);
+
+  console.log("[REPRO] 2/4 POST /accounts...");
+  const ctx = buildContext("register", {
+    challengeId: ch.body.challenge_id,
+    nonce: ch.body.nonce,
+    username,
+    identityPubB64,
+    authPubB64: pubB64,
+  });
+  const sig = await signB64(priv, ctx);
+  const reg = await http("POST", "/accounts", {
+    body: { challenge_id: ch.body.challenge_id, signature: sig, registration_id: 1000 },
+    ip: "198.51.100.7",
+  });
+  console.log(`[REPRO] 2/4 done: ${reg.status}`);
+  const token = reg.body.token;
+  const deviceId = reg.body.device_id;
+  check("repro: account registered", reg.status === 201 && !!deviceId);
+
+  console.log("[REPRO] 3/4 GET /devices/me (valid token)...");
+  const me = await http("GET", "/devices/me", { token, ip: "198.51.100.7" });
+  console.log(`[REPRO] 3/4 done: ${me.status}`);
+  check("repro: valid token authenticates", me.status === 200);
+
+  console.log("[REPRO] 4/4a DELETE /devices/:id (revoke)...");
+  const del = await http("DELETE", `/devices/${deviceId}`, { token, ip: "198.51.100.7" });
+  console.log(`[REPRO] 4/4a done: ${del.status}`);
+  check("repro: device revoked (204)", del.status === 204);
+
+  console.log("[REPRO] 4/4b GET /devices/me with REVOKED token — THE DIVERGENCE POINT. Watch Real-time Logs NOW...");
+  const t0 = Date.now();
+  const meAfter = await http("GET", "/devices/me", { token, ip: "198.51.100.7" }, 0);
+  const elapsed = Date.now() - t0;
+  console.log(`[REPRO] 4/4b done after ${elapsed}ms: ${meAfter.status} ${JSON.stringify(meAfter.body).slice(0, 300)}`);
+  check(
+    "repro: revoked token rejected (401 DEVICE_REVOKED)",
+    meAfter.status === 401 && meAfter.body.error.code === "DEVICE_REVOKED",
+    `status=${meAfter.status} elapsed=${elapsed}ms`,
+  );
+
+  if (failures > 0) {
+    console.error(`[SUMMARY] ${failures} repro check(s) FAILED`);
+    process.exit(1);
+  }
+  console.log("[SUMMARY] ALL REPRO CHECKS PASSED");
+  process.exit(0);
+}
+
 async function main() {
+  if (SMOKE_MODE === "repro") {
+    await minimalRepro();
+    return;
+  }
   await waitUntilReachable();
   const runStart = Date.now();
 
