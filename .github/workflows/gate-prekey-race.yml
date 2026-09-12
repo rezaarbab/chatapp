@@ -107,7 +107,7 @@ jobs:
             },
           };
           EOF
-          npx wrangler deploy 2>&1 | tee deploy.log
+          (cd gate && npx wrangler deploy 2>&1 | tee ../deploy.log)
           URL="$(grep -oE 'https://[a-z0-9-]+\.workers\.dev' deploy.log | head -n 1)"
           if [ -z "$URL" ]; then echo "::error::could not parse gate worker URL"; tail -n 30 deploy.log; exit 1; fi
           echo "GATE_URL=$URL" >> "$GITHUB_ENV"
