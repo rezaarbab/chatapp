@@ -43,14 +43,19 @@ jobs:
           DB_NAME="prekey-gate-$GITHUB_RUN_ID"
           WORKER_NAME="chatapp-gate-race-$GITHUB_RUN_ID"
           create_body="{\"name\":\"$DB_NAME\"}"
-          create_resp="$(curl -s -X POST \
+          http_code=$(curl -s -o d1-create.json -w "%{http_code}" -X POST \
             -H "Authorization: Bearer $CF_TOKEN" \
             -H "Content-Type: application/json" \
             -d "$create_body" \
-            "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT/d1/database")"
-          echo "$create_resp" > d1-create.json
-          DB_ID="$(node -e "const r=require('./d1-create.json');if(!r.success){console.error('D1 create failed: '+JSON.stringify(r.errors));process.exit(1)}console.log(r.result.uuid)")"
-          if [ -z "$DB_ID" ]; then echo "::error::could not create/parse D1 database"; exit 1; fi
+            "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT/d1/database")
+          echo "::notice::D1 create HTTP $http_code"
+          if [ "$http_code" != "200" ] && [ "$http_code" != "201" ]; then
+            echo "::error::D1 create HTTP $http_code"
+            head -c 1200 d1-create.json | while IFS= read -r l; do echo "::error::D1RESP: $(printf '%.250s' "$l")"; done
+            exit 1
+          fi
+          DB_ID="$(node -e "const r=require('./d1-create.json');if(!r.success){console.error('D1 create failed: '+JSON.stringify(r.errors));process.exit(1)}console.log(r.result.uuid)")" || true
+          if [ -z "$DB_ID" ]; then echo "::error::could not parse D1 uuid"; head -c 600 d1-create.json | while IFS= read -r l; do echo "::error::D1RESP: $(printf '%.250s' "$l")"; done; exit 1; fi
           echo "created D1 $DB_NAME ($DB_ID)"
           mkdir -p gate/src
           cat > gate/wrangler.jsonc <<EOF
