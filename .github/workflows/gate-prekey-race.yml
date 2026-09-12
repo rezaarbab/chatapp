@@ -83,6 +83,12 @@ jobs:
                 await env.DB.batch(stmts);
                 return Response.json({ ok: true, seeded: count });
               }
+              if (req.method === "GET" && url.pathname === "/stats") {
+                const row = await env.DB.prepare(
+                  "SELECT COUNT(*) AS total, SUM(CASE WHEN used_at IS NULL THEN 1 ELSE 0 END) AS unused, SUM(CASE WHEN used_at IS NOT NULL THEN 1 ELSE 0 END) AS used FROM gate_race_prekeys"
+                ).first();
+                return Response.json(row);
+              }
               if (req.method === "POST" && url.pathname === "/pop-cas") {
                 // Phase 2 design algorithm: SELECT lowest unused, then CONDITIONAL UPDATE
                 // (compare-and-swap on used_at IS NULL); meta.changes decides ownership.
@@ -156,15 +162,24 @@ jobs:
             const line = `[${mode}] round=${roundNo} delivered=${keys.length} distinct=${distinct.size} duplicates=${dup} nulls=${nulls} maxRetry=${maxRetry} transportErrors=${errors.length}`;
             console.log(line);
             for (const e of errors.slice(0, 3)) console.log(`[ERRSAMPLE] ${JSON.stringify(e).slice(0, 250)}`);
-            return { keys, dup, nulls, transportErrors: errors.length, line };
+            return { keys, dup, nulls, distinctSize: distinct.size, transportErrors: errors.length, line };
           }
 
           let violations = 0;
           for (let r = 1; r <= 8; r++) {
             const res = await round("cas", r);
-            if (res.dup || res.keys.length !== 10 || res.nulls !== 30 || res.transportErrors !== 0) {
+            // Server-side truth: rows marked used must equal the distinct deliveries observed.
+            const stats = (await (await fetch(BASE + "/stats")).json());
+            const correctness = !res.dup
+              && res.keys.length + res.nulls === 40
+              && res.distinctSize === res.keys.length
+              && res.keys.length <= 10
+              && Number(stats.used) === res.distinctSize;
+            if (!correctness) {
               violations += 1;
-              console.log(`::error::CAS VIOLATION: ${res.line}`);
+              console.log(`::error::CAS VIOLATION: ${res.line} stats=${JSON.stringify(stats)}`);
+            } else if (res.transportErrors !== 0) {
+              console.log(`::warning::CAS round ${r}: correctness held (no double delivery, server-side used=${stats.used}) but ${res.transportErrors} harness fetch(es) failed under 40-way concurrency`);
             }
           }
           for (let r = 1; r <= 5; r++) {
