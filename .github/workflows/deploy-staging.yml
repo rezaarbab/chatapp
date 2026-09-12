@@ -113,6 +113,8 @@ jobs:
         run: |
           node test/smoke-staging.mjs 2>&1 | tee smoke.log || true
           if ! grep -qE "ALL (SMOKE TESTS|REPRO CHECKS) PASSED" smoke.log; then
-            grep -E "\[STEP\]|\[SUMMARY\]|crashed" smoke.log | head -n 12 | while IFS= read -r l; do echo "::error::SMOKE: $(printf '%.300s' "$l")"; done
+            grep -E "\[FAIL\]|\[SUMMARY\]|\[DETAIL\]|\[DEBUG500\]|\[WATCHDOG\]|smoke test crashed" smoke.log | head -n 8 | while IFS= read -r l; do echo "::error::DIAG: $(printf '%.400s' "$l")"; done
+            last_http="$(grep -E '^\[HTTP\]' smoke.log | tail -n 1)"
+            echo "::error::LAST-HTTP: $(printf '%.400s' "$last_http")"
             exit 1
           fi
