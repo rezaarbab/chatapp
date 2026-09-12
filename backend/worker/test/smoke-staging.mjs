@@ -59,7 +59,7 @@ async function signB64(priv, message) {
   return b64(new Uint8Array(sig));
 }
 
-async function http(method, path, opts = {}) {
+async function httpOnce(method, path, opts) {
   const headers = { "content-type": "application/json" };
   if (opts.token) headers.authorization = `Bearer ${opts.token}`;
   const res = await fetch(BASE + path, {
@@ -76,9 +76,19 @@ async function http(method, path, opts = {}) {
       json = {};
     }
   }
-  const code = json && json.error ? json.error.code : "";
-  console.log(`[HTTP] ${method} ${path} -> ${res.status} ${code}`);
   return { status: res.status, body: json };
+}
+
+async function http(method, path, opts = {}, retries = 1) {
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await httpOnce(method, path, opts);
+    } catch (e) {
+      if (attempt === retries) throw e;
+      console.log(`[RETRY] ${method} ${path} attempt ${attempt + 1} failed: ${e.message}`);
+      await sleep(2000);
+    }
+  }
 }
 
 function buildContext(purpose, c) {
