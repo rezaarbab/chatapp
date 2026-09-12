@@ -64,6 +64,9 @@ jobs:
           export default {
             async fetch(req, env) {
               const url = new URL(req.url);
+              if (req.method === "GET" && url.pathname === "/health") {
+                return Response.json({ ok: true, worker: "gate-race" });
+              }
               if (req.method === "POST" && url.pathname === "/reset") {
                 await env.DB.batch([
                   env.DB.prepare("DROP TABLE IF EXISTS gate_race_prekeys"),
@@ -177,6 +180,19 @@ jobs:
           process.exit(violations === 0 ? 0 : 1);
           EOF
           set -o pipefail
+          echo "::notice::probing GATE_URL=$GATE_URL"
+          ready=0
+          for i in $(seq 1 10); do
+            code=$(curl -s -o /dev/null -w "%{http_code}" "$GATE_URL/health")
+            echo "health probe $i: HTTP $code"
+            if [ "$code" = "200" ]; then ready=1; break; fi
+            sleep 3
+          done
+          if [ "$ready" != "1" ]; then
+            echo "::error::gate worker never became healthy at $GATE_URL"
+            curl -sI "$GATE_URL/health" | head -n 12 | while IFS= read -r l; do echo "::error::HDR: $(printf '%.200s' "$l")"; done
+            exit 1
+          fi
           if ! node gate-race.mjs 2>&1 | tee gate-race.log; then
             echo "::error::race test step failed"
             tail -n 8 gate-race.log | while IFS= read -r l; do echo "::error::RACE: $(printf '%.250s' "$l")"; done
