@@ -219,6 +219,7 @@ const handleRegister: Handler = async (ctx) => {
     authPub: authPubBytes,
     registrationId: requireRegistrationId(body),
     label: typeof body["label"] === "string" ? (body["label"] as string).slice(0, 64) : null,
+    tokenTtlMs: ctx.tokenTtlMs,
     now: ctx.now,
   });
   return jsonResponse(
@@ -326,6 +327,7 @@ const handleAddDevice: Handler = async (ctx) => {
     authPub: b64ToBytes(row.auth_pub),
     registrationId: requireRegistrationId(body),
     label: typeof body["label"] === "string" ? (body["label"] as string).slice(0, 64) : null,
+    tokenTtlMs: ctx.tokenTtlMs,
     now: ctx.now,
   });
   return jsonResponse({ device_id: deviceId, dev_no, token, token_expires_at }, 201);

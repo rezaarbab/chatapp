@@ -22,6 +22,7 @@ export async function createAccountWithDevice(
     authPub: Uint8Array;
     registrationId: number;
     label: string | null;
+    tokenTtlMs: number;
     now: number;
   },
 ): Promise<{ token: string; token_expires_at: number }> {
@@ -29,7 +30,7 @@ export async function createAccountWithDevice(
   crypto.getRandomValues(raw);
   const token = btoa(String.fromCharCode(...raw));
   const tokenHashHex = await sha256(raw);
-  const tokenExpires = input.now + 30 * 60 * 1000;
+  const tokenExpires = input.now + input.tokenTtlMs;
 
   await db.batch([
     db
@@ -63,6 +64,7 @@ export async function addDeviceWithToken(
     authPub: Uint8Array;
     registrationId: number;
     label: string | null;
+    tokenTtlMs: number;
     now: number;
   },
 ): Promise<{ token: string; token_expires_at: number; dev_no: number }> {
@@ -70,7 +72,7 @@ export async function addDeviceWithToken(
   crypto.getRandomValues(raw);
   const token = btoa(String.fromCharCode(...raw));
   const tokenHashHex = await sha256(raw);
-  const tokenExpires = input.now + 30 * 60 * 1000;
+  const tokenExpires = input.now + input.tokenTtlMs;
 
   const insert = db
     .prepare(
