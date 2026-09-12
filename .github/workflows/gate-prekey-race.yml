@@ -108,8 +108,8 @@ jobs:
           };
           EOF
           (cd gate && npx wrangler deploy 2>&1 | tee ../deploy.log)
-          URL="$(grep -oE 'https://[a-z0-9-]+\.workers\.dev' deploy.log | head -n 1)"
-          if [ -z "$URL" ]; then echo "::error::could not parse gate worker URL"; tail -n 30 deploy.log; exit 1; fi
+          URL="$(grep -oE 'https://[a-zA-Z0-9.-]+\.workers\.dev' deploy.log | head -n 1)"
+          if [ -z "$URL" ]; then echo "::error::could not parse gate worker URL"; tail -n 30 deploy.log | while IFS= read -r l; do echo "::error::DEPLOY: $(printf '%.250s' "$l")"; done; exit 1; fi
           echo "GATE_URL=$URL" >> "$GITHUB_ENV"
           echo "DB_NAME=$DB_NAME" >> "$GITHUB_ENV"
           echo "WORKER_NAME=$WORKER_NAME" >> "$GITHUB_ENV"
