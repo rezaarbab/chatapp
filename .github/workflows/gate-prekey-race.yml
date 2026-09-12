@@ -1,0 +1,196 @@
+# TEMPORARY gate test for Phase 2 design (atomic prekey allocation on real D1).
+# Deploys a throwaway worker + throwaway D1 database, races concurrent pops,
+# then deletes both. Delete this file after the gate report.
+name: gate-prekey-race
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/gate-prekey-race.yml"]
+  workflow_dispatch:
+
+jobs:
+  race:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Guard secrets
+        id: guard
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -n "$CF_TOKEN" ] && [ -n "$CF_ACCOUNT" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::error::Cloudflare secrets missing"
+          fi
+
+      - name: Provision throwaway worker + D1
+        if: steps.guard.outputs.enabled == 'true'
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          export CLOUDFLARE_API_TOKEN="$CF_TOKEN" CLOUDFLARE_ACCOUNT_ID="$CF_ACCOUNT"
+          cd "$RUNNER_TEMP"
+          npm install wrangler --no-fund --no-audit > npm.log 2>&1 || { tail -n 25 npm.log; exit 1; }
+          DB_NAME="prekey-gate-$GITHUB_RUN_ID"
+          WORKER_NAME="chatapp-gate-race-$GITHUB_RUN_ID"
+          npx wrangler d1 create "$DB_NAME" 2>&1 | tee d1-create.log
+          DB_ID="$(grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' d1-create.log | head -n 1)"
+          if [ -z "$DB_ID" ]; then echo "::error::could not parse D1 database id"; exit 1; fi
+          mkdir -p gate/src
+          cat > gate/wrangler.jsonc <<EOF
+          {
+            "name": "$WORKER_NAME",
+            "main": "src/index.js",
+            "compatibility_date": "2025-05-01",
+            "d1_databases": [
+              { "binding": "DB", "database_name": "$DB_NAME", "database_id": "$DB_ID" }
+            ]
+          }
+          EOF
+          cat > gate/src/index.js <<'EOF'
+          export default {
+            async fetch(req, env) {
+              const url = new URL(req.url);
+              if (req.method === "POST" && url.pathname === "/reset") {
+                await env.DB.batch([
+                  env.DB.prepare("DROP TABLE IF EXISTS prekeys"),
+                  env.DB.prepare("CREATE TABLE prekeys (device_id TEXT NOT NULL, key_id INTEGER NOT NULL, used_at INTEGER, PRIMARY KEY (device_id, key_id))"),
+                ]);
+                return Response.json({ ok: true });
+              }
+              if (req.method === "POST" && url.pathname === "/seed") {
+                const { count } = await req.json();
+                const stmts = [];
+                for (let i = 0; i < count; i++) {
+                  stmts.push(env.DB.prepare("INSERT INTO prekeys (device_id, key_id, used_at) VALUES ('dev1', ?1, NULL)").bind(i + 1));
+                }
+                await env.DB.batch(stmts);
+                return Response.json({ ok: true, seeded: count });
+              }
+              if (req.method === "POST" && url.pathname === "/pop-cas") {
+                // Phase 2 design algorithm: SELECT lowest unused, then CONDITIONAL UPDATE
+                // (compare-and-swap on used_at IS NULL); meta.changes decides ownership.
+                const now = Date.now();
+                for (let attempt = 1; attempt <= 15; attempt++) {
+                  const row = await env.DB.prepare(
+                    "SELECT key_id FROM prekeys WHERE device_id = 'dev1' AND used_at IS NULL ORDER BY key_id LIMIT 1"
+                  ).first();
+                  if (!row) return Response.json({ key_id: null, attempt });
+                  const res = await env.DB.prepare(
+                    "UPDATE prekeys SET used_at = ?1 WHERE device_id = 'dev1' AND key_id = ?2 AND used_at IS NULL"
+                  ).bind(now, row.key_id).run();
+                  if (res.meta.changes === 1) return Response.json({ key_id: row.key_id, attempt });
+                }
+                return Response.json({ key_id: null, exhausted: true });
+              }
+              if (req.method === "POST" && url.pathname === "/pop-naive") {
+                // CONTROL: SELECT then UNCONDITIONAL UPDATE across two awaits (no CAS guard).
+                const row = await env.DB.prepare(
+                  "SELECT key_id FROM prekeys WHERE device_id = 'dev1' AND used_at IS NULL ORDER BY key_id LIMIT 1"
+                ).first();
+                if (!row) return Response.json({ key_id: null });
+                await env.DB.prepare(
+                  "UPDATE prekeys SET used_at = ?1 WHERE device_id = 'dev1' AND key_id = ?2"
+                ).bind(Date.now(), row.key_id).run();
+                return Response.json({ key_id: row.key_id });
+              }
+              return new Response("not found", { status: 404 });
+            },
+          };
+          EOF
+          npx wrangler deploy 2>&1 | tee deploy.log
+          URL="$(grep -oE 'https://[a-z0-9-]+\.workers\.dev' deploy.log | head -n 1)"
+          if [ -z "$URL" ]; then echo "::error::could not parse gate worker URL"; tail -n 30 deploy.log; exit 1; fi
+          echo "GATE_URL=$URL" >> "$GITHUB_ENV"
+          echo "DB_NAME=$DB_NAME" >> "$GITHUB_ENV"
+          echo "WORKER_NAME=$WORKER_NAME" >> "$GITHUB_ENV"
+          echo "gate worker: $URL"
+
+      - name: Run concurrent race test
+        if: steps.guard.outputs.enabled == 'true'
+        timeout-minutes: 10
+        run: |
+          cat > gate-race.mjs <<'EOF'
+          const BASE = process.env.GATE_URL;
+          if (!BASE) { console.error("GATE_URL missing"); process.exit(1); }
+          const post = (p, body) => fetch(BASE + p, { method: "POST", body: body ? JSON.stringify(body) : undefined });
+
+          async function round(mode, roundNo) {
+            const reset = await (await post("/reset")).json();
+            if (!reset.ok) throw new Error("reset failed");
+            const seed = await (await post("/seed", { count: 10 })).json();
+            if (!seed.ok) throw new Error("seed failed");
+            const pops = Array.from({ length: 40 }, () => post("/pop-" + mode).then((r) => r.json()));
+            const results = await Promise.all(pops);
+            const keys = results.map((r) => r.key_id).filter((k) => k != null);
+            const distinct = new Set(keys);
+            const dup = keys.length !== distinct.size;
+            const nulls = results.length - keys.length;
+            const maxRetry = Math.max(0, ...results.map((r) => r.attempt || 0));
+            const line = `[${mode}] round=${roundNo} delivered=${keys.length} distinct=${distinct.size} duplicates=${dup} nulls=${nulls} maxRetry=${maxRetry}`;
+            console.log(line);
+            return { keys, dup, nulls, line };
+          }
+
+          let violations = 0;
+          for (let r = 1; r <= 8; r++) {
+            const res = await round("cas", r);
+            if (res.dup || res.keys.length !== 10 || res.nulls !== 30) {
+              violations += 1;
+              console.log(`::error::CAS VIOLATION: ${res.line}`);
+            }
+          }
+          for (let r = 1; r <= 5; r++) {
+            const res = await round("naive", r);
+            console.log(res.dup
+              ? "[INFO] naive control DID show duplicates (race harness demonstrably detects double-delivery)"
+              : "[INFO] naive control: no duplicates this round (race window not hit by scheduler)");
+          }
+          console.log(violations === 0
+            ? "GATE1 RESULT: PASS — CAS pop: 8/8 rounds, exactly 10 distinct deliveries + 30 nulls each round"
+            : `GATE1 RESULT: FAIL — ${violations} round(s) violated CAS invariants`);
+          process.exit(violations === 0 ? 0 : 1);
+          EOF
+          node gate-race.mjs 2>&1 | tee gate-race.log
+          grep -E "GATE1 RESULT|CAS VIOLATION" gate-race.log | head -n 5 | while IFS= read -r l; do
+            case "$l" in
+              *"FAIL"*|*VIOLATION*) echo "::error::$l" ;;
+              *) echo "::notice::$l" ;;
+            esac
+          done
+          grep -q "GATE1 RESULT: PASS" gate-race.log
+
+      - name: Cleanup throwaway resources
+        if: always()
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -n "$WORKER_NAME" ]; then
+            code=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+              -H "Authorization: Bearer $CF_TOKEN" \
+              "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT/workers/scripts/$WORKER_NAME")
+            echo "worker delete: HTTP $code"
+          fi
+          if [ -n "$DB_NAME" ]; then
+            guid=$(curl -s -H "Authorization: Bearer $CF_TOKEN" \
+              "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT/d1/database?per_page=50" \
+              | grep -B2 "\"name\": \"$DB_NAME\"" | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -n 1)
+            if [ -n "$guid" ]; then
+              code=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+                -H "Authorization: Bearer $CF_TOKEN" \
+                "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT/d1/database/$guid")
+              echo "d1 delete: HTTP $code"
+            else
+              echo "d1 db $DB_NAME not found for deletion (may already be gone)"
+            fi
+          fi
