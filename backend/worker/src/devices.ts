@@ -1,6 +1,7 @@
 ﻿import { HttpError } from "./errors";
 import { sha256 } from "./util";
 import { issueToken } from "./tokens";
+import { purgeStatements } from "./prekeys";
 
 export interface DeviceRowInput {
   deviceId: string;
@@ -93,8 +94,10 @@ export async function addDeviceWithToken(
 }
 
 /**
- * Revokes a device and ALL of its tokens in ONE atomic batch â€” fail-closed:
- * either both land, or neither does. Idempotent (guards on revoked_at IS NULL).
+ * Revokes a device and ALL of its tokens and prekeys in ONE atomic batch —
+ * fail-closed: either everything lands, or nothing does (design §4 A4).
+ * Idempotent (guards on revoked_at IS NULL). Purged prekeys stop bundle
+ * serving immediately; dev_no is NEVER reused (migration 0002 semantics).
  */
 export async function revokeDevice(db: D1Database, deviceId: string, now: number): Promise<void> {
   await db.batch([
@@ -104,6 +107,7 @@ export async function revokeDevice(db: D1Database, deviceId: string, now: number
     db
       .prepare("UPDATE auth_tokens SET revoked_at = ?1 WHERE device_id = ?2 AND revoked_at IS NULL")
       .bind(now, deviceId),
+    ...purgeStatements(db, deviceId),
   ]);
 }
 

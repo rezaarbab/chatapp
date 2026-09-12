@@ -15,6 +15,8 @@ export const LIMITS = {
   accountsIp: { limit: 3, windowMs: 600_000 },
   challengeIp: { limit: 10, windowMs: 60_000 },
   verifyIp: { limit: 30, windowMs: 60_000 },
+  prekeysUploadUser: { limit: 30, windowMs: 3_600_000 },
+  prekeysBundleUser: { limit: 60, windowMs: 60_000 },
 } satisfies Record<string, Limit>;
 
 /**

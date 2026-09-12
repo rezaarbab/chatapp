@@ -4,6 +4,7 @@ import { asBytes, b64ToBytes, bytesToB64, sha256 } from "./util";
 import { authenticate, issueToken } from "./tokens";
 import { addDeviceWithToken, createAccountWithDevice, revokeDevice } from "./devices";
 import { buildContext, consumeChallenge, createChallenge, verifyEd25519 } from "./auth";
+import { fetchBundle, uploadPreKeys } from "./prekeys";
 
 interface Env {
   DB: D1Database;
@@ -364,6 +365,31 @@ const handleDevicesMe: Handler = async (ctx) => {
   });
 };
 
+const handlePreKeysUpload: Handler = async (ctx) => {
+  if (!(await checkRateLimit(ctx.db, "prekeys_upload_user", ctx.auth.account_id, LIMITS.prekeysUploadUser, ctx.now))) {
+    throw new HttpError(429, "RATE_LIMITED", "too many prekey uploads");
+  }
+  const body = (ctx.body ?? {}) as Record<string, unknown>;
+  const result = await uploadPreKeys(ctx.db, {
+    deviceId: ctx.auth.device_id,
+    body,
+    now: ctx.now,
+  });
+  return jsonResponse(result);
+};
+
+const handlePreKeysBundle: Handler = async (ctx, params) => {
+  if (!(await checkRateLimit(ctx.db, "prekeys_bundle_user", ctx.auth.account_id, LIMITS.prekeysBundleUser, ctx.now))) {
+    throw new HttpError(429, "RATE_LIMITED", "too many bundle fetches");
+  }
+  const target = params["id"];
+  if (typeof target !== "string" || target.length === 0 || target.length > 64) {
+    throw new HttpError(400, "VALIDATION_ERROR", "invalid device id");
+  }
+  const bundle = await fetchBundle(ctx.db, { targetDeviceId: target, now: ctx.now });
+  return jsonResponse(bundle);
+};
+
 function challengeConsumptionError(reason: "not_found" | "expired" | "used"): HttpError {
   if (reason === "not_found") return new HttpError(404, "NOT_FOUND", "challenge not found");
   if (reason === "expired") return new HttpError(401, "CHALLENGE_EXPIRED", "challenge expired");
@@ -392,6 +418,8 @@ const routes: Route[] = [
   route("POST", "devices", false, handleAddDevice),
   route("GET", "devices/me", true, handleDevicesMe),
   route("DELETE", "devices/:id", true, handleRevokeDevice),
+  route("POST", "prekeys", true, handlePreKeysUpload),
+  route("GET", "devices/:id/prekeys", true, handlePreKeysBundle),
 ];
 
 export async function handleRequest(request: Request, env: Env): Promise<Response> {

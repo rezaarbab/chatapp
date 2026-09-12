@@ -7,6 +7,7 @@ import {
   createChallenge,
   verifyEd25519,
 } from "../src/auth";
+import { applySql } from "./apply-sql";
 
 /**
  * Tink → WebCrypto interoperability test (user-mandated gate before Phase 1).
@@ -31,11 +32,12 @@ CREATE TABLE IF NOT EXISTS auth_challenges (
   auth_pub     TEXT,
   issued_at    INTEGER NOT NULL,
   expires_at   INTEGER NOT NULL,
-  used_at      INTEGER
+  used_at      INTEGER,
+  authorizer_device_id TEXT
 );
 `;
 
-const fixtureRaw = (globalThis as Record<string, unknown>).TINK_FIXTURE as string | undefined;
+const fixtureRaw = (env as Record<string, unknown>).TINK_FIXTURE as string | undefined;
 const fixture = fixtureRaw
   ? (JSON.parse(fixtureRaw) as {
       alg: string;
@@ -47,7 +49,7 @@ const fixture = fixtureRaw
 const hasFixture = !!fixture && fixture.alg === "Ed25519";
 
 beforeAll(async () => {
-  await env.DB.exec(DDL);
+  await applySql(DDL);
 });
 
 describe.skipIf(!hasFixture)("Tink Ed25519 → Workers WebCrypto interop", () => {

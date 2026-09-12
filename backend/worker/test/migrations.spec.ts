@@ -1,18 +1,14 @@
 import { env } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
+import { applySql, migrationsFromBinding } from "./apply-sql";
 
-type Migration = { name: string; sql: string };
 type Row = Record<string, unknown>;
-
-const migrations = JSON.parse(
-  (globalThis as Record<string, unknown>).MIGRATIONS as string,
-) as Migration[];
 
 const NOW = 1_700_000_000_000;
 
 beforeAll(async () => {
-  for (const m of migrations) {
-    await env.DB.exec(m.sql);
+  for (const m of migrationsFromBinding()) {
+    await applySql(m.sql);
   }
 });
 

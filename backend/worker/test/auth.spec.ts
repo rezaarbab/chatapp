@@ -2,6 +2,7 @@ import { SELF, env } from "cloudflare:test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildContext } from "../src/auth";
 import { checkRateLimit } from "../src/ratelimit";
+import { applySql, migrationsFromBinding } from "./apply-sql";
 
 /**
  * Phase 1.3 — Authentication & Token Lifecycle (HTTP-level via SELF.fetch).
@@ -10,10 +11,6 @@ import { checkRateLimit } from "../src/ratelimit";
  */
 
 type Json = Record<string, any>;
-
-const migrations = JSON.parse(
-  (globalThis as Record<string, unknown>).MIGRATIONS as string,
-) as { name: string; sql: string }[];
 
 function b64(bytes: Uint8Array): string {
   let bin = "";
@@ -124,8 +121,8 @@ async function registerAccount(username: string, ip: string): Promise<Registered
 }
 
 beforeAll(async () => {
-  for (const m of migrations) {
-    await env.DB.exec(m.sql);
+  for (const m of migrationsFromBinding()) {
+    await applySql(m.sql);
   }
 });
 
@@ -146,8 +143,10 @@ describe("registration", () => {
   it("rejects duplicate username at challenge time", async () => {
     const username = nextUsername("dup");
     const { pubB64 } = await genKey();
-    const first = await issueRegisterChallenge(username, pubB64, "10.0.0.2");
-    expect(first.status).toBe(200);
+    const acc = await registerAccount(username, "10.0.0.2");
+    expect(acc.token).toBeTruthy();
+    // the account now exists: a fresh register challenge for the SAME username
+    // is rejected with the anti-enumeration 409 before any signature work
     const second = await issueRegisterChallenge(username, pubB64, "10.0.0.2");
     expect(second.status).toBe(409);
     expect(second.body.error.code).toBe("USERNAME_TAKEN");
@@ -318,7 +317,8 @@ describe("revocation", () => {
     expect(me.status).toBe(401);
     expect(me.body.error.code).toBe("DEVICE_REVOKED");
 
-    // pre-issued challenge: verify is fail-closed even though it was unused
+    // pre-issued challenge: verify is fail-closed even though it was unused.
+    // Revoked devices get the uniform 404 (anti-enumeration), same as /auth/challenge.
     const ctx = buildContext("auth", {
       challengeId: ch.body.challenge_id,
       nonce: ch.body.nonce,
@@ -330,8 +330,8 @@ describe("revocation", () => {
       body: { challenge_id: ch.body.challenge_id, signature },
       ip: "10.2.0.1",
     });
-    expect(verify.status).toBe(401);
-    expect(verify.body.error.code).toBe("DEVICE_REVOKED");
+    expect(verify.status).toBe(404);
+    expect(verify.body.error.code).toBe("NOT_FOUND");
 
     // revoked device cannot obtain a new challenge either
     const challenge2 = await http("POST", "/auth/challenge", {
@@ -522,7 +522,6 @@ describe("rate limiting (initial strict mechanism)", () => {
     // next fixed window: counter resets
     expect(await checkRateLimit(env.DB, "test-bucket", "k", limit, t0 + 1000)).toBe(true);
   });
-});
 
   it("limits challenge issuance per source (10 per minute)", async () => {
     const ip = "10.8.8.8";

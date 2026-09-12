@@ -1,10 +1,11 @@
 import fs from "node:fs";
-import { defineWorkersConfig } from "@cloudflare/vitest-pool-workers/config";
+import { defineConfig } from "vitest/config";
+import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
 
-// The Tink→WebCrypto fixture is generated at runtime by the Android instrumented
+// The Tink↔WebCrypto fixture is generated at runtime by the Android instrumented
 // test (real Ed25519 signing on an emulator) and exported via logcat. It is
 // optional here: when absent (pure backend CI), the interop spec is skipped and
-// only migration/auth/token tests run against local miniflare D1.
+// only migration/auth/token/prekey tests run against local miniflare D1.
 const fixturePath = new URL("./tink-fixture.json", import.meta.url);
 let fixture: unknown = null;
 if (fs.existsSync(fixturePath)) {
@@ -27,18 +28,18 @@ const migrations = fs
       .trim(),
   }));
 
-export default defineWorkersConfig({
-  test: {
-    poolOptions: {
-      workers: {
-        wrangler: { configPath: "./wrangler.jsonc" },
-        miniflare: {
-          bindings: {
-            TINK_FIXTURE: JSON.stringify(fixture),
-            MIGRATIONS: JSON.stringify(migrations),
-          },
+// @cloudflare/vitest-pool-workers 0.22.0 (vitest v4 era) exposes the pool as a
+// Vite plugin; the legacy `.../config` subpath no longer exists in that package.
+export default defineConfig({
+  plugins: [
+    cloudflareTest({
+      wrangler: { configPath: "./wrangler.jsonc" },
+      miniflare: {
+        bindings: {
+          TINK_FIXTURE: JSON.stringify(fixture),
+          MIGRATIONS: JSON.stringify(migrations),
         },
       },
-    },
-  },
+    }),
+  ],
 });
