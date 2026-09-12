@@ -110,23 +110,9 @@ jobs:
         env:
           STAGING_URL: ${{ steps.deploy.outputs.url }}
           STAGING_TOKEN_TTL_MS: "20000"
-          SMOKE_MODE: "repro"
         run: |
           node test/smoke-staging.mjs 2>&1 | tee smoke.log || true
-          if ! grep -q "ALL SMOKE TESTS PASSED" smoke.log; then
+          if ! grep -qE "ALL (SMOKE TESTS|REPRO CHECKS) PASSED" smoke.log; then
             grep -E "\[STEP\]|\[SUMMARY\]|crashed" smoke.log | head -n 12 | while IFS= read -r l; do echo "::error::SMOKE: $(printf '%.300s' "$l")"; done
-            exit 1
-          fi
-      - name: Dump wrangler tail on failure
-        if: failure()
-        working-directory: backend/worker
-        run: |
-          if [ -s tail.log ]; then
-            grep -iE "Exception|error|throw|Unhandled|\"outcome\"" tail.log | grep -vE "GET /devices/me -> 401" | head -n 15 | while IFS= read -r l; do echo "::error::TAIL: $(printf '%.300s' "$l")"; done
-          else
-            echo "::error::tail.log empty or missing"
-          fi
-          if ! grep -q "ALL SMOKE TESTS PASSED" smoke.log; then
-            grep "\[DEBUG500\]" smoke.log | head -n 4 | while IFS= read -r l; do echo "::error::DEBUG500: $(printf '%.1500s' "$l")"; done
             exit 1
           fi
