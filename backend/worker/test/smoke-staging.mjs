@@ -398,6 +398,8 @@ async function main() {
   if (failures > 0) {
     console.error(`[SUMMARY] ${failures} SMOKE TEST(S) FAILED`);
     for (const s of steps) console.error(`[STEPS] ${s}`);
+  } else {
+    console.log("[SUMMARY] ALL SMOKE TESTS PASSED");
   }
   clearTimeout(watchdog);
   process.exit(failures === 0 ? 0 : 1);
