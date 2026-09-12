@@ -40,23 +40,15 @@ jobs:
           export CLOUDFLARE_API_TOKEN="$CF_TOKEN" CLOUDFLARE_ACCOUNT_ID="$CF_ACCOUNT"
           cd "$RUNNER_TEMP"
           npm install wrangler --no-fund --no-audit > npm.log 2>&1 || { tail -n 25 npm.log; exit 1; }
-          DB_NAME="prekey-gate-$GITHUB_RUN_ID"
+          DB_NAME="chatapp-staging"
           WORKER_NAME="chatapp-gate-race-$GITHUB_RUN_ID"
-          create_body="{\"name\":\"$DB_NAME\"}"
-          http_code=$(curl -s -o d1-create.json -w "%{http_code}" -X POST \
-            -H "Authorization: Bearer $CF_TOKEN" \
-            -H "Content-Type: application/json" \
-            -d "$create_body" \
-            "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT/d1/database")
-          echo "::notice::D1 create HTTP $http_code"
-          if [ "$http_code" != "200" ] && [ "$http_code" != "201" ]; then
-            echo "::error::D1 create HTTP $http_code"
-            head -c 1200 d1-create.json | while IFS= read -r l; do echo "::error::D1RESP: $(printf '%.250s' "$l")"; done
-            exit 1
-          fi
-          DB_ID="$(node -e "const r=require('./d1-create.json');if(!r.success){console.error('D1 create failed: '+JSON.stringify(r.errors));process.exit(1)}console.log(r.result.uuid)")" || true
-          if [ -z "$DB_ID" ]; then echo "::error::could not parse D1 uuid"; head -c 600 d1-create.json | while IFS= read -r l; do echo "::error::D1RESP: $(printf '%.250s' "$l")"; done; exit 1; fi
-          echo "created D1 $DB_NAME ($DB_ID)"
+          # The CI token cannot CREATE databases (REST returns 403), so the gate
+          # reuses the existing staging database with a dedicated, self-cleaning
+          # table (gate_race_prekeys) that the worker drops/recreates per round.
+          npx wrangler d1 list --json > d1list.json
+          DB_ID="$(node -e "const l=require('./d1list.json');const d=l.find(x=>x.name==='$DB_NAME');if(!d){process.exit(1)}console.log(d.uuid)")" || true
+          if [ -z "$DB_ID" ]; then echo "::error::staging D1 database not found"; exit 1; fi
+          echo "gate uses existing D1 $DB_NAME ($DB_ID)"
           mkdir -p gate/src
           cat > gate/wrangler.jsonc <<EOF
           {
@@ -74,8 +66,8 @@ jobs:
               const url = new URL(req.url);
               if (req.method === "POST" && url.pathname === "/reset") {
                 await env.DB.batch([
-                  env.DB.prepare("DROP TABLE IF EXISTS prekeys"),
-                  env.DB.prepare("CREATE TABLE prekeys (device_id TEXT NOT NULL, key_id INTEGER NOT NULL, used_at INTEGER, PRIMARY KEY (device_id, key_id))"),
+                  env.DB.prepare("DROP TABLE IF EXISTS gate_race_prekeys"),
+                  env.DB.prepare("CREATE TABLE gate_race_prekeys (device_id TEXT NOT NULL, key_id INTEGER NOT NULL, used_at INTEGER, PRIMARY KEY (device_id, key_id))"),
                 ]);
                 return Response.json({ ok: true });
               }
@@ -83,7 +75,7 @@ jobs:
                 const { count } = await req.json();
                 const stmts = [];
                 for (let i = 0; i < count; i++) {
-                  stmts.push(env.DB.prepare("INSERT INTO prekeys (device_id, key_id, used_at) VALUES ('dev1', ?1, NULL)").bind(i + 1));
+                  stmts.push(env.DB.prepare("INSERT INTO gate_race_prekeys (device_id, key_id, used_at) VALUES ('dev1', ?1, NULL)").bind(i + 1));
                 }
                 await env.DB.batch(stmts);
                 return Response.json({ ok: true, seeded: count });
@@ -94,11 +86,11 @@ jobs:
                 const now = Date.now();
                 for (let attempt = 1; attempt <= 15; attempt++) {
                   const row = await env.DB.prepare(
-                    "SELECT key_id FROM prekeys WHERE device_id = 'dev1' AND used_at IS NULL ORDER BY key_id LIMIT 1"
+                    "SELECT key_id FROM gate_race_prekeys WHERE device_id = 'dev1' AND used_at IS NULL ORDER BY key_id LIMIT 1"
                   ).first();
                   if (!row) return Response.json({ key_id: null, attempt });
                   const res = await env.DB.prepare(
-                    "UPDATE prekeys SET used_at = ?1 WHERE device_id = 'dev1' AND key_id = ?2 AND used_at IS NULL"
+                    "UPDATE gate_race_prekeys SET used_at = ?1 WHERE device_id = 'dev1' AND key_id = ?2 AND used_at IS NULL"
                   ).bind(now, row.key_id).run();
                   if (res.meta.changes === 1) return Response.json({ key_id: row.key_id, attempt });
                 }
@@ -107,11 +99,11 @@ jobs:
               if (req.method === "POST" && url.pathname === "/pop-naive") {
                 // CONTROL: SELECT then UNCONDITIONAL UPDATE across two awaits (no CAS guard).
                 const row = await env.DB.prepare(
-                  "SELECT key_id FROM prekeys WHERE device_id = 'dev1' AND used_at IS NULL ORDER BY key_id LIMIT 1"
+                  "SELECT key_id FROM gate_race_prekeys WHERE device_id = 'dev1' AND used_at IS NULL ORDER BY key_id LIMIT 1"
                 ).first();
                 if (!row) return Response.json({ key_id: null });
                 await env.DB.prepare(
-                  "UPDATE prekeys SET used_at = ?1 WHERE device_id = 'dev1' AND key_id = ?2"
+                  "UPDATE gate_race_prekeys SET used_at = ?1 WHERE device_id = 'dev1' AND key_id = ?2"
                 ).bind(Date.now(), row.key_id).run();
                 return Response.json({ key_id: row.key_id });
               }
@@ -171,6 +163,7 @@ jobs:
           console.log(violations === 0
             ? "GATE1 RESULT: PASS — CAS pop: 8/8 rounds, exactly 10 distinct deliveries + 30 nulls each round"
             : `GATE1 RESULT: FAIL — ${violations} round(s) violated CAS invariants`);
+          await post("/reset"); // leave staging D1 clean: drop gate_race_prekeys
           process.exit(violations === 0 ? 0 : 1);
           EOF
           node gate-race.mjs 2>&1 | tee gate-race.log
@@ -194,11 +187,5 @@ jobs:
               "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT/workers/scripts/$WORKER_NAME")
             echo "worker delete: HTTP $code"
           fi
-          if [ -n "$DB_ID" ]; then
-            code=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
-              -H "Authorization: Bearer $CF_TOKEN" \
-              "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT/d1/database/$DB_ID")
-            echo "d1 delete: HTTP $code"
-          else
-            echo "no DB_ID recorded; skipping d1 deletion"
-          fi
+          # NOTE: no D1 deletion — the gate reuses the shared staging database
+          # (read/verified tables only own gate_race_prekeys, dropped by /reset).
