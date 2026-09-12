@@ -42,9 +42,16 @@ jobs:
           npm install wrangler --no-fund --no-audit > npm.log 2>&1 || { tail -n 25 npm.log; exit 1; }
           DB_NAME="prekey-gate-$GITHUB_RUN_ID"
           WORKER_NAME="chatapp-gate-race-$GITHUB_RUN_ID"
-          npx wrangler d1 create "$DB_NAME" 2>&1 | tee d1-create.log
-          DB_ID="$(grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' d1-create.log | head -n 1)"
-          if [ -z "$DB_ID" ]; then echo "::error::could not parse D1 database id"; exit 1; fi
+          create_body="{\"name\":\"$DB_NAME\"}"
+          create_resp="$(curl -s -X POST \
+            -H "Authorization: Bearer $CF_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$create_body" \
+            "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT/d1/database")"
+          echo "$create_resp" > d1-create.json
+          DB_ID="$(node -e "const r=require('./d1-create.json');if(!r.success){console.error('D1 create failed: '+JSON.stringify(r.errors));process.exit(1)}console.log(r.result.uuid)")"
+          if [ -z "$DB_ID" ]; then echo "::error::could not create/parse D1 database"; exit 1; fi
+          echo "created D1 $DB_NAME ($DB_ID)"
           mkdir -p gate/src
           cat > gate/wrangler.jsonc <<EOF
           {
@@ -112,6 +119,7 @@ jobs:
           if [ -z "$URL" ]; then echo "::error::could not parse gate worker URL"; tail -n 30 deploy.log | while IFS= read -r l; do echo "::error::DEPLOY: $(printf '%.250s' "$l")"; done; exit 1; fi
           echo "GATE_URL=$URL" >> "$GITHUB_ENV"
           echo "DB_NAME=$DB_NAME" >> "$GITHUB_ENV"
+          echo "DB_ID=$DB_ID" >> "$GITHUB_ENV"
           echo "WORKER_NAME=$WORKER_NAME" >> "$GITHUB_ENV"
           echo "gate worker: $URL"
 
@@ -181,16 +189,11 @@ jobs:
               "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT/workers/scripts/$WORKER_NAME")
             echo "worker delete: HTTP $code"
           fi
-          if [ -n "$DB_NAME" ]; then
-            guid=$(curl -s -H "Authorization: Bearer $CF_TOKEN" \
-              "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT/d1/database?per_page=50" \
-              | grep -B2 "\"name\": \"$DB_NAME\"" | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -n 1)
-            if [ -n "$guid" ]; then
-              code=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
-                -H "Authorization: Bearer $CF_TOKEN" \
-                "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT/d1/database/$guid")
-              echo "d1 delete: HTTP $code"
-            else
-              echo "d1 db $DB_NAME not found for deletion (may already be gone)"
-            fi
+          if [ -n "$DB_ID" ]; then
+            code=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
+              -H "Authorization: Bearer $CF_TOKEN" \
+              "https://api.cloudflare.com/client/v4/accounts/$CF_ACCOUNT/d1/database/$DB_ID")
+            echo "d1 delete: HTTP $code"
+          else
+            echo "no DB_ID recorded; skipping d1 deletion"
           fi
