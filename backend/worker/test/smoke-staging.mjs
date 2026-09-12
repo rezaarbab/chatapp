@@ -154,6 +154,12 @@ async function registerAccount(username, ip) {
   };
 }
 
+const WATCHDOG_MS = 4 * 60 * 1000;
+const watchdog = setTimeout(() => {
+  console.error(`[WATCHDOG] smoke test exceeded ${WATCHDOG_MS}ms — aborting to preserve diagnostics`);
+  process.exit(1);
+}, WATCHDOG_MS);
+
 async function main() {
   await waitUntilReachable();
   const runStart = Date.now();
@@ -307,6 +313,7 @@ async function main() {
     console.error(`[SUMMARY] ${failures} SMOKE TEST(S) FAILED`);
     for (const s of steps) console.error(`[STEPS] ${s}`);
   }
+  clearTimeout(watchdog);
   process.exit(failures === 0 ? 0 : 1);
 }
 

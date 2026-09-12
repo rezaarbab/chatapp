@@ -17,7 +17,11 @@ export const LIMITS = {
   verifyIp: { limit: 30, windowMs: 60_000 },
 } satisfies Record<string, Limit>;
 
-/** Atomic fixed-window counter. Returns true when the request is allowed. */
+/**
+ * Fixed-window counter (D1-safe: no ON CONFLICT/RETURNING constructs).
+ * D1 processes queries one at a time per database; the brief read-then-write
+ * window is acceptable for approximate rate limiting (not an accounting system).
+ */
 export async function checkRateLimit(
   db: D1Database,
   bucket: string,
@@ -26,15 +30,24 @@ export async function checkRateLimit(
   now: number,
 ): Promise<boolean> {
   const windowStart = Math.floor(now / limit.windowMs) * limit.windowMs;
-  const row = await db
-    .prepare(
-      `INSERT INTO rate_limits (bucket, key, window_start, count) VALUES (?1, ?2, ?3, 1)
-       ON CONFLICT (bucket, key) DO UPDATE SET
-         count = CASE WHEN window_start = ?3 THEN count + 1 ELSE 1 END,
-         window_start = ?3
-       RETURNING count`,
-    )
-    .bind(bucket, key, windowStart)
-    .first<{ count: number }>();
-  return (row?.count ?? 0) <= limit.limit;
+  const existing = await db
+    .prepare("SELECT count, window_start FROM rate_limits WHERE bucket = ?1 AND key = ?2")
+    .bind(bucket, key)
+    .first<{ count: number; window_start: number }>();
+  if (!existing || existing.window_start !== windowStart) {
+    await db
+      .prepare(
+        `INSERT INTO rate_limits (bucket, key, window_start, count) VALUES (?1, ?2, ?3, 1)
+         ON CONFLICT (bucket, key) DO UPDATE SET count = 1, window_start = ?3`,
+      )
+      .bind(bucket, key, windowStart)
+      .run();
+    return true;
+  }
+  const newCount = existing.count + 1;
+  await db
+    .prepare("UPDATE rate_limits SET count = ?1 WHERE bucket = ?2 AND key = ?3")
+    .bind(newCount, bucket, key)
+    .run();
+  return newCount <= limit.limit;
 }
