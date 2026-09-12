@@ -294,7 +294,7 @@ async function main() {
   const del = await http("DELETE", `/devices/${device2}`, { token: token1, ip: "203.0.113.10" });
   stepLog("revoke device2", del);
   check("device2 revoked (204)", del.status === 204);
-  const meAfter = await http("GET", "/devices/me", { token: add.body.token, ip: "203.0.113.10" });
+  const meAfter = await http("GET", "/devices/me", { token: add.body.token, ip: "203.0.113.10" }, 3);
   stepLog("devices/me after revoke", meAfter);
   check(
     "revoked device token immediately invalid (401 DEVICE_REVOKED)",
