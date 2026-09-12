@@ -60,15 +60,28 @@ async function signB64(priv, message) {
   return b64(new Uint8Array(sig));
 }
 
-async function httpOnce(method, path, opts) {
-  const headers = { "content-type": "application/json" };
+let corrSeq = 0;
+
+async function http(method, path, opts = {}) {
+  const corrId = `smoke-${Date.now().toString(36)}-${++corrSeq}`;
+  const headers = { "content-type": "application/json", "x-correlation-id": corrId };
   if (opts.token) headers.authorization = `Bearer ${opts.token}`;
-  const res = await fetch(BASE + path, {
-    method,
-    headers,
-    body: opts.body ? JSON.stringify(opts.body) : undefined,
-    signal: AbortSignal.timeout(15000),
-  });
+  const t0 = Date.now();
+  let res;
+  try {
+    res = await fetch(BASE + path, {
+      method,
+      headers,
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+      signal: AbortSignal.timeout(15000),
+    });
+  } catch (e) {
+    const elapsed = Date.now() - t0;
+    const line = `[DETAIL] corrId=${corrId} ${method} ${path} NO-RESPONSE elapsed=${elapsed}ms error=${e.message}`;
+    console.error(line);
+    console.error(`::error::${line.slice(0, 500)}`);
+    throw e;
+  }
   let json = {};
   if (res.status !== 204) {
     try {
@@ -77,19 +90,16 @@ async function httpOnce(method, path, opts) {
       json = {};
     }
   }
-  return { status: res.status, body: json };
-}
-
-async function http(method, path, opts = {}, retries = 1) {
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      return await httpOnce(method, path, opts);
-    } catch (e) {
-      if (attempt === retries) throw e;
-      console.log(`[RETRY] ${method} ${path} attempt ${attempt + 1} failed: ${e.message}`);
-      await sleep(2000);
-    }
+  const elapsed = Date.now() - t0;
+  const respCorr = res.headers.get("x-correlation-id") || "none";
+  const code = json && json.error ? json.error.code : "";
+  const line = `[HTTP] corrId=${corrId} ${method} ${path} -> ${res.status} ${code} elapsed=${elapsed}ms respCorr=${respCorr}`;
+  console.log(line);
+  if (res.status >= 500) {
+    console.error(`::error::${line.slice(0, 500)}`);
+    console.error(`::error::[BODY500] ${JSON.stringify(json).slice(0, 1200)}`);
   }
+  return { status: res.status, body: json, corrId, respCorr, elapsed };
 }
 
 function buildContext(purpose, c) {
@@ -360,7 +370,7 @@ async function main() {
   const del = await http("DELETE", `/devices/${device2}`, { token: token1, ip: "203.0.113.10" });
   stepLog("revoke device2", del);
   check("device2 revoked (204)", del.status === 204);
-  const meAfter = await http("GET", "/devices/me", { token: add.body.token, ip: "203.0.113.10" }, 3);
+  const meAfter = await http("GET", "/devices/me", { token: add.body.token, ip: "203.0.113.10" });
   stepLog("devices/me after revoke", meAfter);
   check(
     "revoked device token immediately invalid (401 DEVICE_REVOKED)",

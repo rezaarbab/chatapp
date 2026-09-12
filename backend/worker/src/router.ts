@@ -395,12 +395,15 @@ const routes: Route[] = [
 ];
 
 export async function handleRequest(request: Request, env: Env): Promise<Response> {
+  const corrId = request.headers.get("x-correlation-id") || "no-corr-id";
   try {
     const url = new URL(request.url);
     const segments = url.pathname.split("/").filter(Boolean);
     const now = Number(env.NOW_OVERRIDE_MS) > 0 ? Number(env.NOW_OVERRIDE_MS) : Date.now();
     const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
     const ipHash = await sha256(new TextEncoder().encode(ip));
+
+    console.log(`[REQ] ${corrId} ${request.method} ${url.pathname}`);
 
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204 });
@@ -443,16 +446,37 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
       body,
       auth,
     };
-    return await match.handler(ctx, params);
+    const response = await match.handler(ctx, params);
+    response.headers.set("x-correlation-id", corrId);
+    console.log(`[RES] ${corrId} ${response.status}`);
+    return response;
   } catch (e) {
-    if (env.DEBUG_ERRORS === "true" && e instanceof Error) {
-      const status = e instanceof HttpError ? e.status : 500;
-      const code = e instanceof HttpError ? e.code : "INTERNAL";
-      return jsonResponse(
-        { error: { code, message: e.message, stack: (e.stack || "").slice(0, 1200) } },
-        status,
-      );
+    if (e instanceof HttpError) {
+      const res = errorResponse(e);
+      res.headers.set("x-correlation-id", corrId);
+      console.log(`[RES] ${corrId} ${res.status} ${e.code}`);
+      return res;
     }
-    return errorResponse(e);
+    if (env.DEBUG_ERRORS === "true" && e instanceof Error) {
+      console.log(`[ERR] ${corrId} ${e.message}`);
+      const res = jsonResponse(
+        {
+          error: {
+            code: "INTERNAL",
+            message: e.message,
+            stack: (e.stack || "").slice(0, 1200),
+            correlation_id: corrId,
+          },
+        },
+        500,
+      );
+      res.headers.set("x-correlation-id", corrId);
+      console.log(`[RES] ${corrId} 500 INTERNAL`);
+      return res;
+    }
+    const res = errorResponse(e);
+    res.headers.set("x-correlation-id", corrId);
+    console.log(`[RES] ${corrId} 500 INTERNAL`);
+    return res;
   }
 }
