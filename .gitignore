@@ -19,3 +19,4 @@ worker-tests.log
 android-test.log
 interop-test.log
 test-output.txt
+full log.txt
