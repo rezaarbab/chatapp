@@ -126,7 +126,6 @@ jobs:
             echo "::error::tail.log empty or missing"
           fi
           if ! grep -q "ALL SMOKE TESTS PASSED" smoke.log; then
-            grep "add device" smoke.log | head -n 1 | while IFS= read -r l; do echo "::error::ADD: $(printf '%.900s' "$l")"; done
-            grep "auth verify" smoke.log | head -n 1 | while IFS= read -r l; do echo "::error::VERIFY: $(printf '%.900s' "$l")"; done
+            grep "\[DEBUG500\]" smoke.log | head -n 4 | while IFS= read -r l; do echo "::error::DEBUG500: $(printf '%.1500s' "$l")"; done
             exit 1
           fi
