@@ -531,11 +531,11 @@ class SqlCipherProtocolStore(private val db: SQLiteDatabase) :
             put("error", error)
             put("updated_at", now)
         }
-        db.update("outbox", values, "local_id = ?", arrayOf<Any?>(localId))
+        db.update("outbox", values, "local_id = ?", arrayOf(localId))
     }
 
     fun deleteOutbox(localId: String) {
-        db.delete("outbox", "local_id = ?", arrayOf<Any?>(localId))
+        db.delete("outbox", "local_id = ?", arrayOf(localId))
     }
 
     fun listOutbox(): List<OutboxRow> {
@@ -574,11 +574,11 @@ class SqlCipherProtocolStore(private val db: SQLiteDatabase) :
 
     fun touchContact(username: String, now: Long) {
         val values = ContentValues().apply { put("last_activity_at", now) }
-        db.update("contacts", values, "username = ?", arrayOf<Any?>(username))
+        db.update("contacts", values, "username = ?", arrayOf(username))
     }
 
     fun deleteContact(username: String) {
-        db.delete("contacts", "username = ?", arrayOf<Any?>(username))
+        db.delete("contacts", "username = ?", arrayOf(username))
     }
 
     fun loadContact(username: String): String? {

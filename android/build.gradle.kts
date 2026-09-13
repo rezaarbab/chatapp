@@ -46,6 +46,8 @@ dependencies {
     implementation("net.zetetic:sqlcipher-android:4.17.0")
     // Required: sqlcipher-android's SQLiteDatabase exposes androidx.sqlite.db supertypes
     implementation("androidx.sqlite:sqlite:2.7.0")
+    // Phase 5: StateFlow-based repository (poller/sync state) lives in this library
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
 
     androidTestImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
