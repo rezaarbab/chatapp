@@ -7,7 +7,11 @@
     // Production config intentionally omits this (30-minute default).
     "TOKEN_TTL_MS": "20000",
     // staging-only: include exception details in 500 responses for debugging.
-    "DEBUG_ERRORS": "true"
+    "DEBUG_ERRORS": "true",
+    // staging-only: relax D1 rate limits so CI instrumented tests (a single
+    // runner IP driving ~12 registrations per run) are not blocked.
+    // Production config intentionally omits this (multiplier 1).
+    "RATE_LIMIT_MULTIPLIER": "20"
   },
   "d1_databases": [
     {

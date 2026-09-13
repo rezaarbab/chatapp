@@ -12,6 +12,7 @@ interface Env {
   NOW_OVERRIDE_MS?: string;
   TOKEN_TTL_MS?: string; // staging/test override; production keeps the 30-min default
   DEBUG_ERRORS?: string; // staging only: include exception detail in 500 responses
+  RATE_LIMIT_MULTIPLIER?: string; // staging/test override: scale all D1 rate-limit buckets
 }
 
 interface AuthInfo {
@@ -26,6 +27,7 @@ interface Ctx {
   db: D1Database;
   now: number;
   tokenTtlMs: number;
+  rateLimitMultiplier: number;
   ipHash: string;
   authorization: string | null;
   body: unknown;
@@ -98,7 +100,7 @@ const handleAuthChallenge: Handler = async (ctx) => {
     throw new HttpError(400, "VALIDATION_ERROR", "unknown purpose");
   }
 
-  if (!(await checkRateLimit(ctx.db, "challenge_ip", ctx.ipHash, LIMITS.challengeIp, ctx.now))) {
+  if (!(await checkRateLimit(ctx.db, "challenge_ip", ctx.ipHash, LIMITS.challengeIp, ctx.now, ctx.rateLimitMultiplier))) {
     throw new HttpError(429, "RATE_LIMITED", "too many challenges");
   }
 
@@ -177,10 +179,10 @@ const handleRegister: Handler = async (ctx) => {
   const challengeId = requireString(body, "challenge_id", 64);
   const signature = requireB64Bytes(body, "signature", 64);
 
-  if (!(await checkRateLimit(ctx.db, "accounts_ip", ctx.ipHash, LIMITS.accountsIp, ctx.now))) {
+  if (!(await checkRateLimit(ctx.db, "accounts_ip", ctx.ipHash, LIMITS.accountsIp, ctx.now, ctx.rateLimitMultiplier))) {
     throw new HttpError(429, "RATE_LIMITED", "too many registrations from this source");
   }
-  if (!(await checkRateLimit(ctx.db, "accounts_global", "*", LIMITS.accountsGlobal, ctx.now))) {
+  if (!(await checkRateLimit(ctx.db, "accounts_global", "*", LIMITS.accountsGlobal, ctx.now, ctx.rateLimitMultiplier))) {
     throw new HttpError(429, "RATE_LIMITED", "registration capacity reached");
   }
 
@@ -235,7 +237,7 @@ const handleVerify: Handler = async (ctx) => {
   const challengeId = requireString(body, "challenge_id", 64);
   const signature = requireB64Bytes(body, "signature", 64);
 
-  if (!(await checkRateLimit(ctx.db, "verify_ip", ctx.ipHash, LIMITS.verifyIp, ctx.now))) {
+  if (!(await checkRateLimit(ctx.db, "verify_ip", ctx.ipHash, LIMITS.verifyIp, ctx.now, ctx.rateLimitMultiplier))) {
     throw new HttpError(429, "RATE_LIMITED", "too many verify attempts");
   }
 
@@ -367,7 +369,7 @@ const handleDevicesMe: Handler = async (ctx) => {
 };
 
 const handlePreKeysUpload: Handler = async (ctx) => {
-  if (!(await checkRateLimit(ctx.db, "prekeys_upload_user", ctx.auth.account_id, LIMITS.prekeysUploadUser, ctx.now))) {
+  if (!(await checkRateLimit(ctx.db, "prekeys_upload_user", ctx.auth.account_id, LIMITS.prekeysUploadUser, ctx.now, ctx.rateLimitMultiplier))) {
     throw new HttpError(429, "RATE_LIMITED", "too many prekey uploads");
   }
   const body = (ctx.body ?? {}) as Record<string, unknown>;
@@ -380,7 +382,7 @@ const handlePreKeysUpload: Handler = async (ctx) => {
 };
 
 const handlePreKeysBundle: Handler = async (ctx, params) => {
-  if (!(await checkRateLimit(ctx.db, "prekeys_bundle_user", ctx.auth.account_id, LIMITS.prekeysBundleUser, ctx.now))) {
+  if (!(await checkRateLimit(ctx.db, "prekeys_bundle_user", ctx.auth.account_id, LIMITS.prekeysBundleUser, ctx.now, ctx.rateLimitMultiplier))) {
     throw new HttpError(429, "RATE_LIMITED", "too many bundle fetches");
   }
   const target = params["id"];
@@ -397,7 +399,7 @@ const handlePreKeysBundle: Handler = async (ctx, params) => {
 
 const handleAccountDevices: Handler = async (ctx, params) => {
   const caller = ctx.auth.account_id;
-  if (!(await checkRateLimit(ctx.db, "devices_list_caller", caller, LIMITS.devicesListCaller, ctx.now))) {
+  if (!(await checkRateLimit(ctx.db, "devices_list_caller", caller, LIMITS.devicesListCaller, ctx.now, ctx.rateLimitMultiplier))) {
     throw new HttpError(429, "RATE_LIMITED", "too many device-list requests");
   }
   const accountId = params["id"];
@@ -409,7 +411,7 @@ const handleAccountDevices: Handler = async (ctx, params) => {
 };
 
 const handleSendMessages: Handler = async (ctx) => {
-  if (!(await checkRateLimit(ctx.db, "message_send_account", ctx.auth.account_id, LIMITS.messageSendAccount, ctx.now))) {
+  if (!(await checkRateLimit(ctx.db, "message_send_account", ctx.auth.account_id, LIMITS.messageSendAccount, ctx.now, ctx.rateLimitMultiplier))) {
     throw new HttpError(429, "RATE_LIMITED", "too many messages sent");
   }
   const body = (ctx.body ?? {}) as Record<string, unknown>;
@@ -422,7 +424,7 @@ const handleSendMessages: Handler = async (ctx) => {
 };
 
 const handleFetchMessages: Handler = async (ctx) => {
-  if (!(await checkRateLimit(ctx.db, "message_fetch_device", ctx.auth.device_id, LIMITS.messageFetchDevice, ctx.now))) {
+  if (!(await checkRateLimit(ctx.db, "message_fetch_device", ctx.auth.device_id, LIMITS.messageFetchDevice, ctx.now, ctx.rateLimitMultiplier))) {
     throw new HttpError(429, "RATE_LIMITED", "too many fetches");
   }
   const result = await fetchMessages(ctx.db, {
@@ -434,7 +436,7 @@ const handleFetchMessages: Handler = async (ctx) => {
 };
 
 const handleAckMessages: Handler = async (ctx) => {
-  if (!(await checkRateLimit(ctx.db, "message_ack_device", ctx.auth.device_id, LIMITS.messageAckDevice, ctx.now))) {
+  if (!(await checkRateLimit(ctx.db, "message_ack_device", ctx.auth.device_id, LIMITS.messageAckDevice, ctx.now, ctx.rateLimitMultiplier))) {
     throw new HttpError(429, "RATE_LIMITED", "too many acks");
   }
   const body = (ctx.body ?? {}) as Record<string, unknown>;
@@ -525,6 +527,7 @@ export async function handleRequest(request: Request, env: Env): Promise<Respons
       db: env.DB,
       now,
       tokenTtlMs: Number(env.TOKEN_TTL_MS) > 0 ? Number(env.TOKEN_TTL_MS) : 30 * 60 * 1000,
+      rateLimitMultiplier: Number(env.RATE_LIMIT_MULTIPLIER) > 0 ? Number(env.RATE_LIMIT_MULTIPLIER) : 1,
       ipHash,
       authorization: request.headers.get("Authorization"),
       body,

@@ -34,7 +34,9 @@ export async function checkRateLimit(
   key: string,
   limit: Limit,
   now: number,
+  multiplier = 1,
 ): Promise<boolean> {
+  const effectiveLimit = Math.ceil(limit.limit * multiplier);
   const windowStart = Math.floor(now / limit.windowMs) * limit.windowMs;
   const existing = await db
     .prepare("SELECT count, window_start FROM rate_limits WHERE bucket = ?1 AND key = ?2")
@@ -55,5 +57,5 @@ export async function checkRateLimit(
     .prepare("UPDATE rate_limits SET count = ?1 WHERE bucket = ?2 AND key = ?3")
     .bind(newCount, bucket, key)
     .run();
-  return newCount <= limit.limit;
+  return newCount <= effectiveLimit;
 }
