@@ -18,3 +18,4 @@ dependencyResolutionManagement {
 rootProject.name = "chatapp"
 include(":prototype")
 include(":android")
+include(":app")
