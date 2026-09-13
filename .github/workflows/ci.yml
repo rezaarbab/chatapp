@@ -58,12 +58,12 @@ jobs:
           target: google_apis
           arch: x86_64
           disable-animations: true
-          script: ./gradlew :android:connectedAndroidTest --no-daemon --console=plain >> android-test.log 2>&1 || ./gradlew :android:connectedAndroidTest --no-daemon --console=plain >> android-test.log 2>&1; ADB=$(cat adb-path.txt); "$ADB" logcat -d -s TINK_FIXTURE > tink-fixture-raw.log 2>&1 || true; exit 0
+          script: ./gradlew :android:connectedAndroidTest --no-daemon --console=plain >> android-test.log 2>&1 || ./gradlew :android:connectedAndroidTest --no-daemon --console=plain >> android-test.log 2>&1; ADB=$(cat adb-path.txt); "$ADB" logcat -d > logcat-full.log 2>&1 || true; "$ADB" logcat -d -s TINK_FIXTURE > tink-fixture-raw.log 2>&1 || true; exit 0
       - name: Extract interop fixture and gate
         run: |
           tail -n 12 android-test.log || true
           if grep -q "BUILD FAILED" android-test.log; then
-            grep -E "^e: file:|Caused by:|FAILED" android-test.log | head -n 20 | while IFS= read -r line; do echo "::error::${line:0:480}"; done || true
+            echo "::error::instrumented tests failed - full diagnostics in the next step"
             exit 1
           fi
           if [ ! -s tink-fixture-raw.log ]; then
@@ -87,6 +87,66 @@ jobs:
           npm install --legacy-peer-deps --no-fund --no-audit > npm-install.log 2>&1 || { tail -n 25 npm-install.log; exit 1; }
           set -o pipefail
           npx vitest run --reporter=verbose interop 2>&1 | tee interop-test.log
+      - name: Emit android failure diagnostics
+        if: failure()
+        run: |
+          if [ -f android-test.log ]; then
+            line=$(grep -n "What went wrong" android-test.log | head -1 | cut -d: -f1)
+            if [ -n "$line" ]; then
+              sed -n "${line},$((line+6))p" android-test.log | while IFS= read -r l; do echo "::error::WWW: $(printf '%.320s' "$l")"; done
+            else
+              tail -n 6 android-test.log | while IFS= read -r l; do echo "::error::TAIL: $(printf '%.320s' "$l")"; done
+            fi
+          else
+            echo "::error::android-test.log missing (emulator boot or action-level failure)"
+          fi
+          echo "::error::=== JUnit XML failure stack traces ==="
+          find android/build/outputs/androidTest-results -name "*.xml" -print 2>/dev/null | sort | while IFS= read -r f; do
+            python3 - "$f" <<'PYEOF'
+import re, sys
+f = sys.argv[1]
+s = open(f, encoding="utf-8", errors="replace").read()
+for m in re.finditer(r'<testcase[^>]*name="([^"]+)"[^>]*>\s*<(failure|error)[^>]*?(?:message="([^"]*)")?[^>]*>(.*?)</\2>', s, re.S):
+    name, kind, msg, body = m.groups()
+    body = re.sub(r"\s+", " ", body or "").strip()
+    print(f"::error::{kind.upper()} {name}")
+    if msg:
+        print(f"::error::  msg: {msg[:450]}")
+    if body:
+        for chunk in [body[i:i+450] for i in range(0, min(len(body), 1350), 450)]:
+            print(f"::error::  at: {chunk}")
+PYEOF
+          done
+          if [ -s logcat-full.log ]; then
+            echo "::error::=== logcat TestRunner exception blocks ==="
+            awk '/begin exception/{flag=1; n=0} flag{print; n++} /end exception/{flag=0} n>=40{print "  ..."; flag=0}' logcat-full.log | head -n 200 | while IFS= read -r l; do echo "::error::LC: $(printf '%.450s' "$l")"; done
+          fi
+      - name: Android diagnostics into step summary
+        if: always()
+        run: |
+          {
+            echo "## android-test.log (tail 300)"
+            tail -n 300 android-test.log 2>/dev/null || true
+            echo
+            echo "## JUnit XML results"
+            find android/build/outputs/androidTest-results -name "*.xml" -print -exec cat {} \; 2>/dev/null || true
+            echo
+            echo "## logcat TestRunner (head 400)"
+            grep -E "TestRunner" logcat-full.log 2>/dev/null | head -n 400 || true
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload android test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-test-reports
+          path: |
+            android/build/outputs/androidTest-results/
+            android/build/reports/
+            android-test.log
+            logcat-full.log
+            tink-fixture-raw.log
+          if-no-files-found: warn
+
   worker-tests:
     runs-on: ubuntu-latest
     steps:
@@ -108,40 +168,11 @@ jobs:
         run: |
           grep -E "FAIL|✗|×|AssertionError|Error:" worker-tests.log | head -n 8 | while IFS= read -r l; do echo "::error::WT: $(printf '%.320s' "$l")"; done
           tail -n 20 worker-tests.log | while IFS= read -r l; do echo "::error::WT-TAIL: $(printf '%.320s' "$l")"; done
-      - name: Emit failure diagnostics as annotations
-        if: failure()
-        run: |
-          if [ -f android-test.log ]; then
-            line=$(grep -n "What went wrong" android-test.log | head -1 | cut -d: -f1)
-            if [ -n "$line" ]; then
-              sed -n "${line},$((line+6))p" android-test.log | while IFS= read -r l; do echo "::error::WWW: $(printf '%.320s' "$l")"; done
-            else
-              tail -n 6 android-test.log | while IFS= read -r l; do echo "::error::TAIL: $(printf '%.320s' "$l")"; done
-            fi
-          else
-            echo "::error::android-test.log missing (emulator boot or action-level failure)"
-          fi
-          if [ -f backend/worker/interop-test.log ]; then
-            grep -E "FAIL|✗|×|AssertionError|Error:|failed" backend/worker/interop-test.log | head -n 6 | while IFS= read -r l; do echo "::error::VITEST: $(printf '%.320s' "$l")"; done
-            tail -n 12 backend/worker/interop-test.log | while IFS= read -r l; do echo "::error::VT: $(printf '%.320s' "$l")"; done
-          elif [ -f backend/worker/npm-install.log ]; then
-            tail -n 15 backend/worker/npm-install.log | while IFS= read -r l; do echo "::error::NPM: $(printf '%.320s' "$l")"; done
-          else
-            echo "::error::no interop-test.log and no npm-install.log (npm install never started)"
-          fi
-      - name: Failure diagnostics into step summary
+      - name: Worker test diagnostics into step summary
         if: always()
+        working-directory: backend/worker
         run: |
           {
-            echo "## android-test.log (tail)"
-            tail -n 250 android-test.log || true
-            echo
-            echo "## androidTest results"
-            find android/build/outputs -name "*.xml" -print -exec cat {} \; 2>/dev/null || true
+            echo "## worker-tests.log (tail 120)"
+            tail -n 120 worker-tests.log 2>/dev/null || true
           } >> "$GITHUB_STEP_SUMMARY"
-      - name: Upload android test reports
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: android-test-reports
-          path: android/build/
