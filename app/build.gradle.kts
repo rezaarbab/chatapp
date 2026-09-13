@@ -54,8 +54,12 @@ dependencies {
 
     implementation(project(":android"))
 
-    // --- Phase 5 UI stack (PHASE5_APP_DESIGN.md §2, versions verified in Appendix A) ---
-    val composeBom = platform("androidx.compose:compose-bom:2026.08.00")
+    // --- Phase 5 UI stack (PHASE5_APP_DESIGN.md §2; BOM corrected per CI evidence:
+    // BOM 2026.08.00 pins compose 1.12.0 which requires compileSdk 37 + AGP 9.1.0 —
+    // outside the approved route-B envelope. BOM 2026.06.01 pins compose 1.11.4,
+    // the newest line that fits compileSdk 36 / AGP 8.13.2. Same-day-release mapping:
+    // ui 1.11.4 and BOM 2026.06.01 are both dated 2026-07-01.) ---
+    val composeBom = platform("androidx.compose:compose-bom:2026.06.01")
     implementation(composeBom)
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.material3:material3")

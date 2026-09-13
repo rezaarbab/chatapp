@@ -16,9 +16,15 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: Build app APK + run unit tests
         run: |
+          rm -f app-build.log
           if ! ./gradlew :app:assembleDebug :app:testDebugUnitTest --no-daemon --console=plain > app-build.log 2>&1; then
             grep -E "^e: |error:|What went wrong|Caused by:|FAILURE:" app-build.log | head -n 20 | while IFS= read -r l; do echo "::error::APP: $(printf '%.360s' "$l")"; done
             tail -n 30 app-build.log | while IFS= read -r l; do echo "::error::APP-TAIL: $(printf '%.360s' "$l")"; done
+            exit 1
+          fi
+          if ! grep -q "BUILD SUCCESSFUL" app-build.log; then
+            echo "::error::APP: no BUILD SUCCESSFUL marker in app-build.log"
+            tail -n 20 app-build.log | while IFS= read -r l; do echo "::error::APP-TAIL: $(printf '%.360s' "$l")"; done
             exit 1
           fi
       - name: Enforce no-logging rule in :app (design §12)
@@ -94,11 +100,11 @@ jobs:
           target: google_apis
           arch: x86_64
           disable-animations: true
-          script: ./gradlew :android:connectedAndroidTest --no-daemon --console=plain >> android-test.log 2>&1 || ./gradlew :android:connectedAndroidTest --no-daemon --console=plain >> android-test.log 2>&1; ADB=$(cat adb-path.txt); "$ADB" logcat -d > logcat-full.log 2>&1 || true; "$ADB" logcat -d -s TINK_FIXTURE > tink-fixture-raw.log 2>&1 || true; exit 0
+          script: rm -f android-test.log; ./gradlew :android:connectedAndroidTest --no-daemon --console=plain >> android-test.log 2>&1 || ./gradlew :android:connectedAndroidTest --no-daemon --console=plain >> android-test.log 2>&1; if grep -q "BUILD SUCCESSFUL" android-test.log; then RESULT=0; else RESULT=1; fi; ADB=$(cat adb-path.txt); "$ADB" logcat -d > logcat-full.log 2>&1 || true; "$ADB" logcat -d -s TINK_FIXTURE > tink-fixture-raw.log 2>&1 || true; exit $RESULT
       - name: Extract interop fixture and gate
         run: |
           tail -n 12 android-test.log || true
-          if grep -q "BUILD FAILED" android-test.log; then
+          if ! grep -q "BUILD SUCCESSFUL" android-test.log; then
             echo "::error::instrumented tests failed - full diagnostics in the next step"
             exit 1
           fi
