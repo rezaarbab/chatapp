@@ -241,15 +241,18 @@ class Phase4E2ETest {
             assertEquals(1, first.size)
             assertTrue(plaintext.contentEquals(first[0].plaintext))
 
-            // restart, then fetch again: the server redelivers the un-acked row
+            // restart, then fetch again: the server redelivers the un-acked row.
+            // libsignal rejects it as a duplicate (already decrypted pre-crash);
+            // the row comes back flagged duplicate, plaintext withheld.
             b.reopenStore()
             val redelivered = b.messaging.receive(ack = false)
             assertEquals("server must redeliver un-acked rows", 1, redelivered.size)
+            assertTrue("redelivered row must be the same logical message", redelivered[0].duplicate)
+            assertEquals(first[0].logicalMsgId, redelivered[0].logicalMsgId)
 
-            // the final receive() decrypts the redelivered row as a duplicate
-            // (DuplicateMessageException → already-processed) and ACKs it
+            // the final receive() treats the duplicate as already-processed and ACKs it
             val final = b.messaging.receive()
-            assertTrue("duplicate must not re-deliver plaintext", final.isEmpty())
+            assertTrue("duplicate must not re-deliver plaintext", final.all { it.duplicate } && final.size == 1)
 
             // the queue is now empty and the local mirror kept the plaintext
             assertTrue(b.messaging.receive().isEmpty())

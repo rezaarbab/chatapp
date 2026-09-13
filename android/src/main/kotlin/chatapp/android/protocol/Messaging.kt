@@ -46,6 +46,8 @@ class Messaging(
         val senderDevNo: Int,
         val seq: Long,
         val plaintext: ByteArray,
+        /** True when the server redelivered a row libsignal already knows. */
+        val duplicate: Boolean = false,
     )
 
     private fun ownAddress(): SignalProtocolAddress {
@@ -131,11 +133,16 @@ class Messaging(
             val seq = row.getLong("seq")
             val wire = chatapp.android.account.unB64(row.getString("ciphertext"))
             val cipher = SessionCipher(store, ownAddress(), SignalProtocolAddress(senderAccountId, senderDevNo))
-            val plaintext = try {
-                decryptAny(cipher, wire)
-            } catch (e: DuplicateMessageException) {
-                null
-            }
+        val plaintext = try {
+            decryptAny(cipher, wire)
+        } catch (e: DuplicateMessageException) {
+            // Server-side redelivery of a row we already decrypted (crash
+            // before ACK). Report it as duplicate so callers can verify the
+            // server's redelivery while keeping the plaintext out of the
+            // delivered set (it is already in the local mirror).
+            out.add(ReceivedMessage(deliveryId, logicalMsgId, senderAccountId, senderDevNo, seq, ByteArray(0), duplicate = true))
+            null
+        }
             store.insertMessage(
                 deliveryId, logicalMsgId, senderAccountId, senderDevNo, seq,
                 plaintext ?: ByteArray(0), now,
