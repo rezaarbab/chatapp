@@ -63,6 +63,30 @@ class SqlCipherProtocolStore(private val db: SQLiteDatabase) :
                 "distribution_id TEXT NOT NULL, " +
                 "record BLOB NOT NULL, " +
                 "PRIMARY KEY (name, device_id, distribution_id))",
+            // Phase 4 additive tables (design §8): account/token state, the Tink
+            // auth keyset, and the local plaintext mirror (crash-safe ACK order).
+            // All live inside the same SQLCipher database (encrypted at rest).
+            "CREATE TABLE IF NOT EXISTS account_state (" +
+                "id INTEGER PRIMARY KEY CHECK (id = 1), " +
+                "account_id TEXT NOT NULL, " +
+                "device_id TEXT NOT NULL, " +
+                "dev_no INTEGER NOT NULL, " +
+                "registration_id INTEGER NOT NULL, " +
+                "username TEXT NOT NULL, " +
+                "token TEXT NOT NULL, " +
+                "token_expires_at INTEGER NOT NULL, " +
+                "next_key_id INTEGER NOT NULL)",
+            "CREATE TABLE IF NOT EXISTS auth_keyset (" +
+                "id INTEGER PRIMARY KEY CHECK (id = 1), " +
+                "keyset BLOB NOT NULL)",
+            "CREATE TABLE IF NOT EXISTS messages (" +
+                "delivery_id TEXT PRIMARY KEY, " +
+                "logical_msg_id TEXT NOT NULL, " +
+                "sender_account_id TEXT NOT NULL, " +
+                "sender_dev_no INTEGER NOT NULL, " +
+                "seq INTEGER NOT NULL, " +
+                "plaintext BLOB NOT NULL, " +
+                "received_at INTEGER NOT NULL)",
         )
 
         fun open(file: File, passphrase: ByteArray): SqlCipherProtocolStore {
@@ -350,6 +374,110 @@ class SqlCipherProtocolStore(private val db: SQLiteDatabase) :
         ).use { cursor ->
             if (cursor == null) return null
             return SenderKeyRecord(cursor.getBlob(0))
+        }
+    }
+
+    // ---- Phase 4: account state / auth keyset / local message mirror ----
+
+    data class AccountState(
+        val accountId: String,
+        val deviceId: String,
+        val devNo: Int,
+        val registrationId: Int,
+        val username: String,
+        val token: String,
+        val tokenExpiresAt: Long,
+        var nextKeyId: Int,
+    )
+
+    fun saveAccountState(state: AccountState) {
+        val values = ContentValues().apply {
+            put("id", 1)
+            put("account_id", state.accountId)
+            put("device_id", state.deviceId)
+            put("dev_no", state.devNo)
+            put("registration_id", state.registrationId)
+            put("username", state.username)
+            put("token", state.token)
+            put("token_expires_at", state.tokenExpiresAt)
+            put("next_key_id", state.nextKeyId)
+        }
+        db.insert("account_state", SQLiteDatabase.CONFLICT_REPLACE, values)
+    }
+
+    fun loadAccountState(): AccountState? {
+        queryOne("SELECT account_id, device_id, dev_no, registration_id, username, token, token_expires_at, next_key_id FROM account_state WHERE id = 1").use { c ->
+            if (c == null) return null
+            val state = AccountState(
+                accountId = c.getString(0),
+                deviceId = c.getString(1),
+                devNo = c.getInt(2),
+                registrationId = c.getInt(3),
+                username = c.getString(4),
+                token = c.getString(5),
+                tokenExpiresAt = c.getLong(6),
+                nextKeyId = c.getInt(7),
+            )
+            return state
+        }
+    }
+
+    fun requireAccountState(): AccountState =
+        checkNotNull(loadAccountState()) { "device not registered" }
+
+    /** Internal counters only; table names are code constants, never input. */
+    fun rawQueryCount(table: String): Cursor = db.rawQuery("SELECT COUNT(*) FROM $table")
+
+    fun saveAuthKeyset(keyset: ByteArray) {
+        val values = ContentValues().apply {
+            put("id", 1)
+            put("keyset", keyset)
+        }
+        db.insert("auth_keyset", SQLiteDatabase.CONFLICT_REPLACE, values)
+    }
+
+    fun loadAuthKeyset(): ByteArray? {
+        queryOne("SELECT keyset FROM auth_keyset WHERE id = 1").use { c ->
+            if (c == null) return null
+            return c.getBlob(0)
+        }
+    }
+
+    /** Allocates a device-unique, never-reused prekey id (persisted counter). */
+    fun nextPreKeyId(): Int {
+        val state = checkNotNull(loadAccountState()) { "account_state missing" }
+        val id = state.nextKeyId
+        state.nextKeyId += 1
+        check(state.nextKeyId <= 16_777_215) { "prekey id space exhausted" }
+        saveAccountState(state)
+        return id
+    }
+
+    fun insertMessage(
+        deliveryId: String,
+        logicalMsgId: String,
+        senderAccountId: String,
+        senderDevNo: Int,
+        seq: Long,
+        plaintext: ByteArray,
+        receivedAt: Long,
+    ) {
+        val values = ContentValues().apply {
+            put("delivery_id", deliveryId)
+            put("logical_msg_id", logicalMsgId)
+            put("sender_account_id", senderAccountId)
+            put("sender_dev_no", senderDevNo)
+            put("seq", seq)
+            put("plaintext", plaintext)
+            put("received_at", receivedAt)
+        }
+        db.insert("messages", SQLiteDatabase.CONFLICT_IGNORE, values)
+    }
+
+    fun countMessages(): Int {
+        queryOne("SELECT COUNT(*) FROM messages").use { c ->
+            checkNotNull(c) { "messages table missing" }
+            return c.getInt(0)
         }
     }
 }
