@@ -12,6 +12,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -61,6 +62,13 @@ private fun AppNavHost(container: AppContainer) {
     val repo = container.repository
     val registeredInitially = remember { repo.isRegistered() }
 
+    // Poller lifecycle (design §7): foreground 60s while the app is on screen.
+    LaunchedEffect(Unit) {
+        if (repo.isRegistered()) {
+            repo.startPolling(foreground = true)
+        }
+    }
+
     NavHost(navController = nav, startDestination = if (registeredInitially) "home" else "welcome") {
         composable("welcome") {
             val vm: OnboardingViewModel = viewModel(factory = OnboardingViewModel.Factory(repo))
@@ -70,13 +78,17 @@ private fun AppNavHost(container: AppContainer) {
             val vm: ConversationsViewModel = viewModel(factory = ConversationsViewModel.Factory(repo))
             ConversationsScreen(
                 vm,
-                onOpenChat = { peer, title -> nav.navigate("chat/$peer?title=$title") },
+                onOpenChat = { peer, title ->
+                    val enc = java.net.URLEncoder.encode(title, "UTF-8")
+                    nav.navigate("chat/$peer?title=$enc")
+                },
                 onOpenDevices = { nav.navigate("devices") },
             )
         }
         composable("chat/{peerKey}?title={title}") { entry ->
             val peerKey = entry.arguments?.getString("peerKey") ?: return@composable
-            val title = entry.arguments?.getString("title") ?: peerKey
+            val rawTitle = entry.arguments?.getString("title") ?: peerKey
+            val title = runCatching { java.net.URLDecoder.decode(rawTitle, "UTF-8") }.getOrDefault(rawTitle)
             val vm: ChatViewModel = viewModel(factory = ChatViewModel.Factory(repo, peerKey))
             ChatScreen(vm, title = title, onBack = { nav.popBackStack() })
         }

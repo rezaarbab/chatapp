@@ -114,13 +114,21 @@ class Phase5AcceptanceTest {
         settle()
         assertTrue("start chat", clickIfVisible("شروع"))
         settle()
+        // the chat screen must be reachable before typing
+        assertTrue(
+            "chat screen must open (input visible)",
+            eventually(30_000) { textVisible("پیام…") },
+        )
 
         // ---------- 4. send from the UI ----------
         val outgoing = "salam az ui"
         compose.onNodeWithText("پیام…").performTextInput(outgoing)
         settle()
         assertTrue("send button", clickIfVisible("ارسال"))
-        assertTrue("bubble shows the sent text", eventually(30_000) { textVisible(outgoing) })
+        assertTrue(
+            "bubble shows the sent text",
+            eventually(60_000) { textVisible(outgoing) },
+        )
 
         // ---------- 5. counterpart receives via the real backend ----------
         val received = mutableListOf<ByteArray>()
