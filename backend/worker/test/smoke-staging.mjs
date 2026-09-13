@@ -518,9 +518,10 @@ async function main() {
     );
 
     // RACE 2: concurrent sends with the SAME logical id — exactly one stored row
+    const DUP_N = 5;
     const dupLogical = crypto.randomUUID();
     const dupSends = await Promise.all(
-      Array.from({ length: 5 }, () =>
+      Array.from({ length: DUP_N }, () =>
         http("POST", "/messages", {
           token: tokA,
           ip: "203.0.113.10",
@@ -531,7 +532,7 @@ async function main() {
     check("p3-race2: all concurrent same-logical sends answered 200", dupSends.every((r) => r.status === 200), `statuses=${JSON.stringify(dupSends.map((r) => r.status))}`);
     const queuedCount = dupSends.filter((r) => r.body?.results?.[0]?.status === "queued").length;
     const dupCountResults = dupSends.filter((r) => r.body?.results?.[0]?.status === "duplicate").length;
-    check("p3-race2: exactly one 'queued' result, rest 'duplicate'", queuedCount === 1 && dupCountResults === RACE_N - 1, `queued=${queuedCount} dup=${dupCountResults}`);
+    check("p3-race2: exactly one 'queued' result, rest 'duplicate'", queuedCount === 1 && dupCountResults === DUP_N - 1, `queued=${queuedCount} dup=${dupCountResults}`);
     const dupInbox = await http("GET", "/messages?limit=200", { token: tokB, ip: "203.0.113.11" });
     const storedForLogical = (dupInbox.body.messages || []).filter((r) => r.logical_msg_id === dupLogical).length;
     check("p3-race2: exactly ONE stored row for the logical id", storedForLogical === 1, `stored=${storedForLogical}`);
