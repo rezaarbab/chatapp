@@ -88,14 +88,14 @@ fun ConversationsScreen(
             text = {
                 Column {
                     Text(
-                        "گیرنده با اولین پیام شناسایی می‌شود (جست‌وجوی نام کاربری روی سرور موجود نیست)",
+                        "شناسه حساب گیرنده را وارد کنید (username-lookup روی سرور موجود نیست؛ پس از اولین پیام، نام نمایشی ذخیره می‌شود)",
                         style = MaterialTheme.typography.bodySmall,
                     )
                     Spacer(Modifier.height(8.dp))
                     OutlinedTextField(
                         value = username,
                         onValueChange = { username = it },
-                        label = { Text("نام کاربری گیرنده") },
+                        label = { Text("شناسه حساب (account_id)") },
                         singleLine = true,
                     )
                     if (newChatError != null) {

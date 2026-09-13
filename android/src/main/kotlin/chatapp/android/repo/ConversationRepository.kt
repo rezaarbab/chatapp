@@ -261,21 +261,17 @@ open class ConversationRepository(private val runtime: ClientRuntime) {
         peerKey: String,
         own: SqlCipherProtocolStore.AccountState,
     ): List<Messaging.TargetDevice> {
-        val accountId = if (peerKey == "self") {
-            own.accountId
-        } else {
-            val known = store.loadContact(peerKey)
-            if (known != null) known else {
-                // first contact: username is the only handle the server knows (§15.1)
-                peerKey
-            }
+        val accountId = when {
+            peerKey == "self" -> own.accountId
+            // peerKey may already BE an account_id (direct-share form) or a
+            // previously resolved username (contacts table). The backend has
+            // NO username-lookup endpoint (Phase-4 §15.1) — the ONLY first-contact
+            // handle it accepts is the account_id itself.
+            else -> store.loadContact(peerKey) ?: peerKey
         }
         val devices = withAuthRefresh { messaging.discoverDevices(accountId) }
-        if (peerKey != "self") {
-            // cache the resolution so future sends skip discovery ambiguity
-            if (store.loadContact(peerKey) == null) {
-                rememberContact(peerKey, accountId)
-            }
+        if (peerKey != "self" && store.loadContact(peerKey) == null) {
+            rememberContact(peerKey, accountId)
         }
         return devices
             .filter { it.deviceId != own.deviceId } // never loop back to THIS device

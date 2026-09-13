@@ -107,10 +107,10 @@ class Phase5AcceptanceTest {
             assertTrue(eventually { textVisible("گفتگوی جدید") })
         }
 
-        // ---------- 3. open a new chat with the counterpart ----------
+        // ---------- 3. open a new chat with the counterpart (account_id) ----------
         assertTrue("new chat button", clickIfVisible("گفتگوی جدید"))
         settle()
-        compose.onNodeWithText("نام کاربری گیرنده").performTextInput(cpUsername)
+        compose.onNodeWithText("شناسه حساب (account_id)").performTextInput(cpState.accountId)
         settle()
         assertTrue("start chat", clickIfVisible("شروع"))
         settle()
@@ -160,7 +160,7 @@ class Phase5AcceptanceTest {
         // ---------- 7. relaunch; history + session persist ----------
         compose.activityRule.scenario.onActivity { it.recreate() }
         assertTrue("home after relaunch", eventually(30_000) { textVisible("گفتگوی جدید") })
-        assertTrue("chat row persists", clickIfVisible(cpUsername, 30_000))
+        assertTrue("chat row persists", clickIfVisible(cpState.accountId, 30_000))
         assertTrue("sent message survives relaunch", eventually { textVisible(outgoing) })
         assertTrue("reply survives relaunch", eventually { textVisible(reply) })
     }

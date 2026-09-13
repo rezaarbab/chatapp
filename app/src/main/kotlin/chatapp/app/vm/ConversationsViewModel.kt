@@ -57,14 +57,14 @@ class ConversationsViewModel(private val repo: ConversationRepository) : ViewMod
         }
     }
 
-    /** Peer key for navigation: username for a brand-new chat (§4 first-send discovery). */
-    fun startNewChat(username: String, onValid: (String) -> Unit) {
-        if (!OnboardingViewModel.validUsername(username)) {
-            _newChatError.value = "نام کاربری نامعتبر است"
+    /** Peer key for navigation: account_id (UUID) for a brand-new chat (§4). */
+    fun startNewChat(accountId: String, onValid: (String) -> Unit) {
+        if (!accountId.contains("-") || accountId.length < 32) {
+            _newChatError.value = "شناسه حساب معتبر نیست (UUID)"
             return
         }
         _newChatError.value = null
-        onValid(username)
+        onValid(accountId)
     }
 
     fun clearNewChatError() { _newChatError.value = null }

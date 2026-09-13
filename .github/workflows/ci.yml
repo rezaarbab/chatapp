@@ -79,10 +79,15 @@ jobs:
           script: |
             rm -f app-e2e.log
             ./gradlew :app:connectedDebugAndroidTest --no-daemon --console=plain >> app-e2e.log 2>&1 || true
-            if grep -q "BUILD SUCCESSFUL" app-e2e.log; then RESULT=0; else RESULT=1; fi
             ADB=$(cat adb-path.txt)
             "$ADB" logcat -d > app-e2e-logcat.log 2>&1 || true
-            exit $RESULT
+      - name: Gate on acceptance results
+        run: |
+          tail -n 15 app-e2e.log || true
+          if ! grep -q "BUILD SUCCESSFUL" app-e2e.log; then
+            echo "::error::Phase-5 acceptance journey failed - diagnostics in the next step"
+            exit 1
+          fi
       - name: Emit e2e failure diagnostics
         if: failure()
         run: |
