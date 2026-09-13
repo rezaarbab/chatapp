@@ -64,7 +64,7 @@ class Phase4E2ETest {
                 context.getDatabasePath("phase4_$label.db"),
                 DatabaseKeyManager.getOrCreatePassphrase(context, "phase4_alias_$label"),
             )
-            check(_store.isOpen)
+            check(_store.isOpen())
         }
     }
 
