@@ -55,6 +55,25 @@ class ClientRuntime internal constructor(
          */
         @JvmStatic
         fun forJvmTest(): ClientRuntime = ClientRuntime(null, null, null, null, null)
+
+        /**
+         * E2E-counterpart factory (design §13): wraps an ALREADY-OPEN store and a
+         * client — used by app instrumented tests to build the outside "user B"
+         * protocol stack without UI. Production code never calls this.
+         */
+        fun forOpenStore(
+            store: SqlCipherProtocolStore,
+            client: ChatApiClient,
+        ): ClientRuntime {
+            val accounts = AccountManager(client, store)
+            return ClientRuntime(
+                store = store,
+                client = client,
+                accounts = accounts,
+                preKeys = PreKeyManager(client, store),
+                messaging = Messaging(client, store),
+            )
+        }
     }
 
     fun close() = store?.close()

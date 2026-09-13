@@ -47,6 +47,81 @@ jobs:
           name: app-unit-test-reports
           path: app/build/reports/tests/
 
+  app-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Build app + androidTest APKs (no emulator)
+        run: |
+          printf '%s' "$ANDROID_HOME/platform-tools/adb" > adb-path.txt
+          if ! ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest --no-daemon --console=plain > app-e2e-build.log 2>&1; then
+            grep -E "^e: |error:|What went wrong|Caused by:|FAILURE:" app-e2e-build.log | head -n 20 | while IFS= read -r l; do echo "::error::E2EBUILD: $(printf '%.360s' "$l")"; done
+            tail -n 25 app-e2e-build.log | while IFS= read -r l; do echo "::error::E2EBUILD-TAIL: $(printf '%.360s' "$l")"; done
+            exit 1
+          fi
+      - name: Enable KVM group perms
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Run Phase-5 acceptance journey on emulator (real UI, real staging)
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          script: |
+            rm -f app-e2e.log
+            ./gradlew :app:connectedDebugAndroidTest --no-daemon --console=plain >> app-e2e.log 2>&1 || true
+            if grep -q "BUILD SUCCESSFUL" app-e2e.log; then RESULT=0; else RESULT=1; fi
+            ADB=$(cat adb-path.txt)
+            "$ADB" logcat -d > app-e2e-logcat.log 2>&1 || true
+            exit $RESULT
+      - name: Emit e2e failure diagnostics
+        if: failure()
+        run: |
+          if [ -f app-e2e.log ]; then
+            line=$(grep -n "What went wrong" app-e2e.log | head -1 | cut -d: -f1)
+            if [ -n "$line" ]; then
+              sed -n "${line},$((line+8))p" app-e2e.log | while IFS= read -r l; do echo "::error::E2E: $(printf '%.320s' "$l")"; done
+            else
+              tail -n 8 app-e2e.log | while IFS= read -r l; do echo "::error::E2E-TAIL: $(printf '%.320s' "$l")"; done
+            fi
+            grep -E "FAILED|failed," app-e2e.log | head -n 12 | while IFS= read -r l; do echo "::error::E2E-FAIL: $(printf '%.320s' "$l")"; done
+          else
+            echo "::error::app-e2e.log missing (emulator boot failure)"
+          fi
+          if [ -f app-e2e-logcat.log ]; then
+            echo "::error::=== TestRunner blocks ==="
+            grep -E "TestRunner|FATAL|AndroidRuntime" app-e2e-logcat.log | head -n 80 | while IFS= read -r l; do echo "::error::LC: $(printf '%.400s' "$l")"; done
+          fi
+      - name: E2E results into step summary
+        if: always()
+        run: |
+          {
+            echo "## app-e2e.log (tail 250)"
+            tail -n 250 app-e2e.log 2>/dev/null || true
+            echo
+            echo "## Phase-5 acceptance JUnit XML"
+            find app/build/outputs/androidTest-results -name "*.xml" -print -exec cat {} \; 2>/dev/null || true
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload e2e reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-e2e-reports
+          path: |
+            app/build/outputs/androidTest-results/
+            app-e2e.log
+            app-e2e-logcat.log
+          if-no-files-found: warn
+
   prototype-tests:
     runs-on: ubuntu-latest
     steps:
