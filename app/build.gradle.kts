@@ -6,12 +6,14 @@ plugins {
 
 android {
     namespace = "chatapp.app"
-    compileSdk = 35
+    // Route B (user-approved): BOM 2026.08.00 (compose 1.10.x) requires compileSdk 36
+    // and AGP >= 8.9.1; AGP is 8.13.2 (root build.gradle.kts). :android stays on 35.
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "chatapp.app"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 35 // runtime behavior unchanged; only compileSdk moved for BOM 2026.08.00
         versionCode = 1
         versionName = "0.1.0"
         // Same public staging default as :android (overridable via -PstagingUrl)
