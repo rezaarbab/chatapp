@@ -1,2 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest />
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Phase 4: the library's network layer (ChatApiClient) talks to the real
+         staging backend. Library manifests are merged into any consuming app,
+         so the permission is declared here rather than only in test code. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+</manifest>
