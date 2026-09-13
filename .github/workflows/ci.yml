@@ -103,19 +103,19 @@ jobs:
           echo "::error::=== JUnit XML failure stack traces ==="
           find android/build/outputs/androidTest-results -name "*.xml" -print 2>/dev/null | sort | while IFS= read -r f; do
             python3 - "$f" <<'PYEOF'
-import re, sys
-f = sys.argv[1]
-s = open(f, encoding="utf-8", errors="replace").read()
-for m in re.finditer(r'<testcase[^>]*name="([^"]+)"[^>]*>\s*<(failure|error)[^>]*?(?:message="([^"]*)")?[^>]*>(.*?)</\2>', s, re.S):
-    name, kind, msg, body = m.groups()
-    body = re.sub(r"\s+", " ", body or "").strip()
-    print(f"::error::{kind.upper()} {name}")
-    if msg:
-        print(f"::error::  msg: {msg[:450]}")
-    if body:
-        for chunk in [body[i:i+450] for i in range(0, min(len(body), 1350), 450)]:
-            print(f"::error::  at: {chunk}")
-PYEOF
+            import re, sys
+            f = sys.argv[1]
+            s = open(f, encoding="utf-8", errors="replace").read()
+            for m in re.finditer(r'<testcase[^>]*name="([^"]+)"[^>]*>\s*<(failure|error)[^>]*?(?:message="([^"]*)")?[^>]*>(.*?)</\2>', s, re.S):
+                name, kind, msg, body = m.groups()
+                body = re.sub(r"\s+", " ", body or "").strip()
+                print(f"::error::{kind.upper()} {name}")
+                if msg:
+                    print(f"::error::  msg: {msg[:450]}")
+                if body:
+                    for chunk in [body[i:i+450] for i in range(0, min(len(body), 1350), 450)]:
+                        print(f"::error::  at: {chunk}")
+            PYEOF
           done
           if [ -s logcat-full.log ]; then
             echo "::error::=== logcat TestRunner exception blocks ==="
