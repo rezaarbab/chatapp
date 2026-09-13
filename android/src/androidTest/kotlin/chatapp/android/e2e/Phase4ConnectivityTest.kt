@@ -8,7 +8,6 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.fail
 import org.junit.Test
 import org.junit.runner.RunWith
-
 /**
  * Phase 4 / T0 (user mandate step 1): proves the REAL emulator reaches the REAL
  * Cloudflare staging deployment before anything else is built or trusted.
@@ -22,9 +21,9 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class Phase4ConnectivityTest {
 
-    private val stagingUrl: String =
-        InstrumentationRegistry.getArguments().getString("stagingUrl")
-            ?: fail("stagingUrl instrumentation argument is missing")
+    private val stagingUrl: String = requireNotNull(
+        InstrumentationRegistry.getArguments().getString("stagingUrl"),
+    ) { "stagingUrl instrumentation argument missing" }
 
     @Test
     fun t0_emulatorReachesRealStagingAndAuthWallIsActive() {

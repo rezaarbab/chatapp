@@ -33,9 +33,8 @@ jobs:
           java-version: "21"
       - uses: gradle/actions/setup-gradle@v4
       - name: Build android artifacts (no emulator)
-        run: ./gradlew :android:assembleDebug :android:assembleDebugAndroidTest --no-daemon --console=plain > android-build.log 2>&1 || { tail -n 40 android-build.log; exit 1; }; printf '%s' "$ANDROID_HOME/platform-tools/adb" > adb-path.txt
+        run: printf '%s' "$ANDROID_HOME/platform-tools/adb" > adb-path.txt; ./gradlew :android:assembleDebug :android:assembleDebugAndroidTest --no-daemon --console=plain > android-build.log 2>&1 || { grep -E "^e: |error:|What went wrong|Caused by:|FAILURE:" android-build.log | head -n 16 | while IFS= read -r l; do echo "::error::BUILD: $(printf '%.360s' "$l")"; done; tail -n 25 android-build.log | while IFS= read -r l; do echo "::error::BUILD-TAIL: $(printf '%.360s' "$l")"; done; exit 1; }
       - name: Upload debug APK artifact
-        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: android-debug-apk
