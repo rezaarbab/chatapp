@@ -195,6 +195,15 @@ class Phase4E2ETest {
             a.messaging.send(b.preKeys, plaintext, listOf(targetOf(b)))
             val received = b.messaging.receive()
             assertEquals(1, received.size)
+
+            // B replies BEFORE the restart. Receiving the reply confirms A's
+            // session (clears its pending pre-key — the same double-ratchet
+            // confirmation flow proven in t1), so the post-restart send can
+            // prove session survival via WHISPER: an unconfirmed session would
+            // legitimately re-send PREKEY regardless of persistence.
+            b.messaging.send(a.preKeys, "phase4 e2e: t3 confirm".toByteArray(), listOf(targetOf(a)))
+            assertEquals(1, a.messaging.receive().size)
+
             val mirrorCountBefore = b.store.countMessages()
 
             // simulated restart: close + reopen every store (fresh KeyStore unwrap)
