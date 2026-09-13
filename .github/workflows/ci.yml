@@ -34,6 +34,13 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
       - name: Build android artifacts (no emulator)
         run: ./gradlew :android:assembleDebug :android:assembleDebugAndroidTest --no-daemon --console=plain > android-build.log 2>&1 || { tail -n 40 android-build.log; exit 1; }; printf '%s' "$ANDROID_HOME/platform-tools/adb" > adb-path.txt
+      - name: Upload debug APK artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-debug-apk
+          path: android/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
       - name: Enable KVM group perms
         run: |
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules

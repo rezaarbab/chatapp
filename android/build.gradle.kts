@@ -10,6 +10,10 @@ android {
     defaultConfig {
         minSdk = 26
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        // Phase 4: real staging URL injected into instrumented tests (public,
+        // not a secret). Override with -PstagingUrl=https://... when needed.
+        testInstrumentationRunnerArguments["stagingUrl"] =
+            (project.findProperty("stagingUrl") as String?) ?: "https://chatapp-staging.aacc32351.workers.dev"
     }
 
     compileOptions {
@@ -46,6 +50,8 @@ dependencies {
     androidTestImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
-    // Device Authentication Key signing (Ed25519) — standard, audited Google library
-    androidTestImplementation("com.google.crypto.tink:tink-android:1.23.0")
+    // Device Authentication key signing (Ed25519) — standard, audited Google library.
+    // Phase 4: needed by main code (AccountManager signs real challenges), so it is
+    // a compile dependency now; already proven on-device in Phase 0.5-B.
+    implementation("com.google.crypto.tink:tink-android:1.23.0")
 }
