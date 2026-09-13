@@ -47,7 +47,7 @@ class ChatApiClient(baseUrl: String) {
                 if (payload != null) {
                     conn.doOutput = true
                     conn.setRequestProperty("content-type", "application/json")
-                    conn.fixedLengthStreamingMode(payload.size)
+                    conn.setFixedLengthStreamingMode(payload.size)
                     conn.outputStream.use { it.write(payload) }
                 }
                 val status = conn.responseCode
