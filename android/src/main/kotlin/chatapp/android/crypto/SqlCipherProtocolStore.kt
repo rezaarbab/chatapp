@@ -87,6 +87,22 @@ class SqlCipherProtocolStore(private val db: SQLiteDatabase) :
                 "seq INTEGER NOT NULL, " +
                 "plaintext BLOB NOT NULL, " +
                 "received_at INTEGER NOT NULL)",
+            // Phase 5 additive tables (design §6): outbox for in-flight sends,
+            // contacts for username->account_id resolution discovered on first send.
+            "CREATE TABLE IF NOT EXISTS outbox (" +
+                "local_id TEXT PRIMARY KEY, " +
+                "recipient_username TEXT NOT NULL, " +
+                "plaintext BLOB NOT NULL, " +
+                "state TEXT NOT NULL CHECK (state IN ('pending','sent','failed')), " +
+                "logical_msg_id TEXT, " +
+                "error TEXT, " +
+                "created_at INTEGER NOT NULL, " +
+                "updated_at INTEGER NOT NULL)",
+            "CREATE TABLE IF NOT EXISTS contacts (" +
+                "username TEXT PRIMARY KEY, " +
+                "account_id TEXT, " +
+                "confirmed_at INTEGER, " +
+                "last_activity_at INTEGER)",
         )
 
         fun open(file: File, passphrase: ByteArray): SqlCipherProtocolStore {
@@ -479,5 +495,179 @@ class SqlCipherProtocolStore(private val db: SQLiteDatabase) :
             checkNotNull(c) { "messages table missing" }
             return c.getInt(0)
         }
+    }
+
+    // ---- Phase 5: outbox + contacts (design §6/§8) ----
+
+    data class OutboxRow(
+        val localId: String,
+        val recipientUsername: String,
+        val plaintext: ByteArray,
+        val state: String,
+        val logicalMsgId: String?,
+        val error: String?,
+        val createdAt: Long,
+        val updatedAt: Long,
+    )
+
+    fun insertOutbox(row: OutboxRow) {
+        val values = ContentValues().apply {
+            put("local_id", row.localId)
+            put("recipient_username", row.recipientUsername)
+            put("plaintext", row.plaintext)
+            put("state", row.state)
+            put("logical_msg_id", row.logicalMsgId)
+            put("error", row.error)
+            put("created_at", row.createdAt)
+            put("updated_at", row.updatedAt)
+        }
+        db.insert("outbox", SQLiteDatabase.CONFLICT_REPLACE, values)
+    }
+
+    fun updateOutboxState(localId: String, state: String, logicalMsgId: String?, error: String?, now: Long) {
+        val values = ContentValues().apply {
+            put("state", state)
+            put("logical_msg_id", logicalMsgId)
+            put("error", error)
+            put("updated_at", now)
+        }
+        db.update("outbox", values, "local_id = ?", arrayOf<Any?>(localId))
+    }
+
+    fun deleteOutbox(localId: String) {
+        db.delete("outbox", "local_id = ?", arrayOf<Any?>(localId))
+    }
+
+    fun listOutbox(): List<OutboxRow> {
+        val result = mutableListOf<OutboxRow>()
+        val cursor = db.rawQuery(
+            "SELECT local_id, recipient_username, plaintext, state, logical_msg_id, error, created_at, updated_at FROM outbox ORDER BY created_at",
+        )
+        cursor.use { c ->
+            while (c.moveToNext()) {
+                result.add(
+                    OutboxRow(
+                        localId = c.getString(0),
+                        recipientUsername = c.getString(1),
+                        plaintext = c.getBlob(2),
+                        state = c.getString(3),
+                        logicalMsgId = c.getString(4),
+                        error = c.getString(5),
+                        createdAt = c.getLong(6),
+                        updatedAt = c.getLong(7),
+                    ),
+                )
+            }
+        }
+        return result
+    }
+
+    fun upsertContact(username: String, accountId: String?, now: Long) {
+        val values = ContentValues().apply {
+            put("username", username)
+            put("account_id", accountId)
+            put("confirmed_at", now)
+            put("last_activity_at", now)
+        }
+        db.insert("contacts", SQLiteDatabase.CONFLICT_REPLACE, values)
+    }
+
+    fun touchContact(username: String, now: Long) {
+        val values = ContentValues().apply { put("last_activity_at", now) }
+        db.update("contacts", values, "username = ?", arrayOf<Any?>(username))
+    }
+
+    fun deleteContact(username: String) {
+        db.delete("contacts", "username = ?", arrayOf<Any?>(username))
+    }
+
+    fun loadContact(username: String): String? {
+        queryOne("SELECT account_id FROM contacts WHERE username = ?", username).use { c ->
+            if (c == null) return null
+            return c.getString(0)
+        }
+    }
+
+    fun listContacts(): List<Pair<String, String?>> {
+        val result = mutableListOf<Pair<String, String?>>()
+        val cursor = db.rawQuery("SELECT username, account_id FROM contacts ORDER BY username")
+        cursor.use { c ->
+            while (c.moveToNext()) result.add(c.getString(0) to c.getString(1))
+        }
+        return result
+    }
+
+    /**
+     * Conversation rows for the list screen (design §4): peer-scoped aggregates
+     * over the mirror + outbox. Returns raw cursor-driven data; no plaintext
+     * beyond the preview snippet that the UI must render.
+     */
+    data class ThreadRow(
+        val peerKey: String,
+        val lastActivityAt: Long,
+        val preview: ByteArray,
+        val lastOutState: String?,
+    )
+
+    fun listConversationRows(ownAccountId: String): List<ThreadRow> {
+        val rows = mutableListOf<ThreadRow>()
+        // Distinct peers from the mirror, with their latest row
+        val mirror = db.rawQuery(
+            "SELECT peer, MAX(at) AS last_at FROM (" +
+                " SELECT CASE WHEN sender_account_id = ?1 THEN 'self' ELSE sender_account_id END AS peer, received_at AS at, plaintext" +
+                " FROM messages ) GROUP BY peer ORDER BY last_at DESC",
+            ownAccountId,
+        )
+        val latest = HashMap<String, Pair<Long, ByteArray>>()
+        mirror.use { c ->
+            while (c.moveToNext()) latest[c.getString(0)] = c.getLong(1) to ByteArray(0)
+        }
+        for (peer in latest.keys) {
+            val snap = queryOne(
+                "SELECT plaintext, received_at FROM messages WHERE CASE WHEN sender_account_id = ?1 THEN 'self' ELSE sender_account_id END = ?2 ORDER BY received_at DESC, seq DESC LIMIT 1",
+                ownAccountId, peer,
+            )
+            snap?.use { cc ->
+                rows.add(ThreadRow(peer, cc.getLong(1), cc.getBlob(0), null))
+            }
+        }
+        // Pending outbound rows create their own conversations
+        val pending = db.rawQuery(
+            "SELECT recipient_username, MAX(updated_at) FROM outbox WHERE state != 'sent' GROUP BY recipient_username",
+        )
+        val pendingPeers = mutableListOf<String>()
+        pending.use { c ->
+            while (c.moveToNext()) pendingPeers.add(c.getString(0))
+        }
+        for (u in pendingPeers) {
+            if (latest.keys.contains(u)) continue
+            val last = queryOne(
+                "SELECT plaintext, updated_at, state FROM outbox WHERE recipient_username = ? ORDER BY updated_at DESC LIMIT 1",
+                u,
+            )
+            last?.use { cc ->
+                rows.add(ThreadRow(u, cc.getLong(1), cc.getBlob(0), cc.getString(2)))
+            }
+        }
+        return rows
+    }
+
+    fun listThreadRows(ownAccountId: String, peerKey: String, limit: Int = 500): List<Pair<ByteArray, Long>> {
+        val out = mutableListOf<Pair<ByteArray, Long>>()
+        val cursor = if (peerKey == "self") {
+            db.rawQuery(
+                "SELECT plaintext, received_at FROM messages WHERE sender_account_id = ?1 ORDER BY received_at ASC, seq ASC LIMIT ?2",
+                ownAccountId, limit.toLong(),
+            )
+        } else {
+            db.rawQuery(
+                "SELECT plaintext, received_at FROM messages WHERE sender_account_id = ?1 ORDER BY received_at ASC, seq ASC LIMIT ?2",
+                peerKey, limit.toLong(),
+            )
+        }
+        cursor.use { c ->
+            while (c.moveToNext()) out.add(c.getBlob(0) to c.getLong(1))
+        }
+        return out
     }
 }

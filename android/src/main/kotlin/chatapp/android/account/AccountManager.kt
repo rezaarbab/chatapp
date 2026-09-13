@@ -181,6 +181,52 @@ class AccountManager(
         return { context: String -> sign(handle, context) }
     }
 
+    /**
+     * Phase 5 (design §6): silent re-issue of an expired token using the STORED
+     * auth keyset — no user interaction. Solves the auth challenge
+     * (purpose="auth", context v1|auth|challenge_id|nonce|account_id|device_id)
+     * and persists the new token. Fails if the device was revoked (server 401).
+     */
+    fun refreshToken(): SqlCipherProtocolStore.AccountState {
+        val state = store.requireAccountState()
+        val handle = checkNotNull(store.loadAuthKeyset()) { "no auth keyset stored" }
+            .let { TinkProtoKeysetFormat.parseKeyset(it, InsecureSecretKeyAccess.get()) }
+
+        val challenge = client.request(
+            "POST",
+            "/auth/challenge",
+            body = JSONObject()
+                .put("purpose", "auth")
+                .put("device_id", state.deviceId),
+        )!!
+        val context = listOf(
+            "v1", "auth", challenge.getString("challenge_id"), challenge.getString("nonce"),
+            state.accountId, state.deviceId,
+        ).joinToString("|")
+        val signature = sign(handle, context)
+
+        val verified = client.request(
+            "POST",
+            "/auth/verify",
+            body = JSONObject()
+                .put("challenge_id", challenge.getString("challenge_id"))
+                .put("signature", b64(signature)),
+        )!!
+
+        val refreshed = SqlCipherProtocolStore.AccountState(
+            accountId = state.accountId,
+            deviceId = state.deviceId,
+            devNo = state.devNo,
+            registrationId = state.registrationId,
+            username = state.username,
+            token = verified.getString("token"),
+            tokenExpiresAt = verified.getLong("token_expires_at"),
+            nextKeyId = state.nextKeyId,
+        )
+        store.saveAccountState(refreshed)
+        return refreshed
+    }
+
     fun requireState(): SqlCipherProtocolStore.AccountState = store.requireAccountState()
 
     companion object {
