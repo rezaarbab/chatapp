@@ -2,6 +2,7 @@
 import { sha256 } from "./util";
 import { issueToken } from "./tokens";
 import { purgeStatements } from "./prekeys";
+import { messagePurgeStatements } from "./messages";
 
 export interface DeviceRowInput {
   deviceId: string;
@@ -43,6 +44,8 @@ export async function createAccountWithDevice(
          VALUES (?1, ?2, 1, ?3, ?4, ?5, ?6, ?7, ?7)`,
       )
       .bind(input.deviceId, input.accountId, input.identityPub, input.authPub, input.registrationId, input.label, input.now),
+    // Phase 3: per-device seq counter starts at 1 (never reused, §6).
+    db.prepare("INSERT INTO device_seq (device_id, next_seq) VALUES (?1, 1)").bind(input.deviceId),
     db
       .prepare("INSERT INTO auth_tokens (token_hash, device_id, issued_at, expires_at) VALUES (?1, ?2, ?3, ?4)")
       .bind(tokenHashHex, input.deviceId, input.now, tokenExpires),
@@ -81,10 +84,13 @@ export async function addDeviceWithToken(
        SELECT ?1, ?2, COALESCE(MAX(dev_no), 0) + 1, ?3, ?4, ?5, ?6, ?7, ?7 FROM devices WHERE account_id = ?2`,
     )
     .bind(input.deviceId, input.accountId, input.identityPub, input.authPub, input.registrationId, input.label, input.now);
+  const seqInsert = db
+    .prepare("INSERT INTO device_seq (device_id, next_seq) VALUES (?1, 1)")
+    .bind(input.deviceId);
   const tokenInsert = db
     .prepare("INSERT INTO auth_tokens (token_hash, device_id, issued_at, expires_at) VALUES (?1, ?2, ?3, ?4)")
     .bind(tokenHashHex, input.deviceId, input.now, tokenExpires);
-  const results = await db.batch([insert, tokenInsert]);
+  const results = await db.batch([insert, seqInsert, tokenInsert]);
 
   const devNoRow = await db
     .prepare("SELECT dev_no FROM devices WHERE device_id = ?1")
@@ -94,10 +100,11 @@ export async function addDeviceWithToken(
 }
 
 /**
- * Revokes a device and ALL of its tokens and prekeys in ONE atomic batch —
- * fail-closed: either everything lands, or nothing does (design §4 A4).
- * Idempotent (guards on revoked_at IS NULL). Purged prekeys stop bundle
- * serving immediately; dev_no is NEVER reused (migration 0002 semantics).
+ * Revokes a device and ALL of its tokens, prekeys, and queue rows in ONE
+ * atomic batch — fail-closed: either everything lands, or nothing does
+ * (design §4 A4, §11). Idempotent (guards on revoked_at IS NULL). Purged
+ * prekeys stop bundle serving and purged queue rows stop delivery
+ * immediately; dev_no is NEVER reused (migration 0002 semantics).
  */
 export async function revokeDevice(db: D1Database, deviceId: string, now: number): Promise<void> {
   await db.batch([
@@ -108,6 +115,7 @@ export async function revokeDevice(db: D1Database, deviceId: string, now: number
       .prepare("UPDATE auth_tokens SET revoked_at = ?1 WHERE device_id = ?2 AND revoked_at IS NULL")
       .bind(now, deviceId),
     ...purgeStatements(db, deviceId),
+    ...messagePurgeStatements(db, deviceId),
   ]);
 }
 

@@ -17,6 +17,10 @@ export const LIMITS = {
   verifyIp: { limit: 30, windowMs: 60_000 },
   prekeysUploadUser: { limit: 30, windowMs: 3_600_000 },
   prekeysBundleUser: { limit: 60, windowMs: 60_000 },
+  messageSendAccount: { limit: 120, windowMs: 60_000 },
+  messageFetchDevice: { limit: 60, windowMs: 60_000 },
+  messageAckDevice: { limit: 60, windowMs: 60_000 },
+  devicesListCaller: { limit: 30, windowMs: 60_000 },
 } satisfies Record<string, Limit>;
 
 /**

@@ -74,10 +74,10 @@ jobs:
           node -e "
             const out = require('./tables.json');
             const tables = (out[0].results || []).map(r => r.name);
-            const need = ['accounts','devices','signed_prekeys','one_time_prekeys','kyber_prekeys','message_queue','attachments','attachment_delivery','backups','auth_challenges','auth_tokens','rate_limits'];
+            const need = ['accounts','devices','signed_prekeys','one_time_prekeys','kyber_prekeys','message_queue','device_seq','attachments','attachment_delivery','backups','auth_challenges','auth_tokens','rate_limits'];
             const missing = need.filter(t => !tables.includes(t));
             if (missing.length) { console.error('missing tables:', missing); process.exit(1); }
-            console.log('all 12 tables present on real D1');
+            console.log('all 13 tables present on real D1');
           "
       - name: Deploy Worker to staging
         if: steps.guard.outputs.enabled == 'true'

@@ -47,7 +47,7 @@ async function insertMessage(
 }
 
 describe("migrations: schema", () => {
-  it("creates all eleven tables", async () => {
+  it("creates all thirteen tables", async () => {
     const { results } = await env.DB.prepare("SELECT name FROM sqlite_master WHERE type='table'").all();
     const names = results.map((r: Row) => r.name as string);
     const expected = [
@@ -58,9 +58,11 @@ describe("migrations: schema", () => {
       "auth_tokens",
       "backups",
       "devices",
+      "device_seq",
       "kyber_prekeys",
       "message_queue",
       "one_time_prekeys",
+      "rate_limits",
       "signed_prekeys",
     ];
     for (const t of expected) expect(names).toContain(t);
@@ -168,8 +170,23 @@ describe("migrations: message_queue constraints", () => {
     await expect(insertMessage("mig-msg-4", "mig-logical-4", "no-such-device", "mig-dev-11", 2)).rejects.toThrow();
   });
 
-  it("enforces idempotency key UNIQUE (sender_dev_id, logical_msg_id)", async () => {
+  it("enforces per-target idempotency UNIQUE (sender, recipient, logical_msg_id) — migration 0009", async () => {
+    // Same sender + same recipient + same logical id → rejected (idempotency).
     await expect(insertMessage("mig-msg-5", "mig-logical-2", "mig-dev-11", "mig-dev-11", 5)).rejects.toThrow();
+  });
+
+  it("allows fan-out: same sender + same logical id to DIFFERENT recipients (0009 fix)", async () => {
+    await insertAccount("mig-acc-i", "mig_ivan");
+    await insertDevice("mig-dev-13", "mig-acc-i", 1);
+    // 0004 would have rejected this (UNIQUE sender_dev_id, logical_msg_id); 0009 allows it.
+    await insertMessage("mig-msg-6a", "mig-logical-6", "mig-dev-11", "mig-dev-13", 1);
+    await insertMessage("mig-msg-6b", "mig-logical-6", "mig-dev-11", "mig-dev-11", 6);
+  });
+
+  it("enforces UNIQUE (recipient_dev_id, seq) — strict per-device ordering", async () => {
+    // mig-dev-13 already holds seq 1 for recipient (from the fan-out test above);
+    // a different sender reusing the same (recipient, seq) must be rejected.
+    await expect(insertMessage("mig-msg-7", "mig-logical-7", "mig-dev-13", "mig-dev-13", 1)).rejects.toThrow();
   });
 
   it("supports atomic single-use prekey pop via conditional UPDATE", async () => {

@@ -5,6 +5,7 @@ import { authenticate, issueToken } from "./tokens";
 import { addDeviceWithToken, createAccountWithDevice, revokeDevice } from "./devices";
 import { buildContext, consumeChallenge, createChallenge, verifyEd25519 } from "./auth";
 import { fetchBundle, uploadPreKeys } from "./prekeys";
+import { ackMessages, fetchMessages, listAccountDevices, sendMessages } from "./messages";
 
 interface Env {
   DB: D1Database;
@@ -390,6 +391,57 @@ const handlePreKeysBundle: Handler = async (ctx, params) => {
   return jsonResponse(bundle);
 };
 
+// ---------------------------------------------------------------------------
+// Phase 3 — Messaging (PHASE3_MESSAGING_DESIGN.md §13)
+// ---------------------------------------------------------------------------
+
+const handleAccountDevices: Handler = async (ctx, params) => {
+  const caller = ctx.auth.account_id;
+  if (!(await checkRateLimit(ctx.db, "devices_list_caller", caller, LIMITS.devicesListCaller, ctx.now))) {
+    throw new HttpError(429, "RATE_LIMITED", "too many device-list requests");
+  }
+  const accountId = params["id"];
+  if (typeof accountId !== "string" || accountId.length === 0 || accountId.length > 64) {
+    throw new HttpError(400, "VALIDATION_ERROR", "invalid account id");
+  }
+  const result = await listAccountDevices(ctx.db, { accountId });
+  return jsonResponse(result);
+};
+
+const handleSendMessages: Handler = async (ctx) => {
+  if (!(await checkRateLimit(ctx.db, "message_send_account", ctx.auth.account_id, LIMITS.messageSendAccount, ctx.now))) {
+    throw new HttpError(429, "RATE_LIMITED", "too many messages sent");
+  }
+  const body = (ctx.body ?? {}) as Record<string, unknown>;
+  const result = await sendMessages(ctx.db, {
+    senderDeviceId: ctx.auth.device_id,
+    body,
+    now: ctx.now,
+  });
+  return jsonResponse(result);
+};
+
+const handleFetchMessages: Handler = async (ctx) => {
+  if (!(await checkRateLimit(ctx.db, "message_fetch_device", ctx.auth.device_id, LIMITS.messageFetchDevice, ctx.now))) {
+    throw new HttpError(429, "RATE_LIMITED", "too many fetches");
+  }
+  const result = await fetchMessages(ctx.db, {
+    deviceId: ctx.auth.device_id,
+    limitParam: ctx.url.searchParams.get("limit"),
+    now: ctx.now,
+  });
+  return jsonResponse(result);
+};
+
+const handleAckMessages: Handler = async (ctx) => {
+  if (!(await checkRateLimit(ctx.db, "message_ack_device", ctx.auth.device_id, LIMITS.messageAckDevice, ctx.now))) {
+    throw new HttpError(429, "RATE_LIMITED", "too many acks");
+  }
+  const body = (ctx.body ?? {}) as Record<string, unknown>;
+  const result = await ackMessages(ctx.db, { deviceId: ctx.auth.device_id, body });
+  return jsonResponse(result);
+};
+
 function challengeConsumptionError(reason: "not_found" | "expired" | "used"): HttpError {
   if (reason === "not_found") return new HttpError(404, "NOT_FOUND", "challenge not found");
   if (reason === "expired") return new HttpError(401, "CHALLENGE_EXPIRED", "challenge expired");
@@ -420,6 +472,10 @@ const routes: Route[] = [
   route("DELETE", "devices/:id", true, handleRevokeDevice),
   route("POST", "prekeys", true, handlePreKeysUpload),
   route("GET", "devices/:id/prekeys", true, handlePreKeysBundle),
+  route("GET", "accounts/:id/devices", true, handleAccountDevices),
+  route("POST", "messages", true, handleSendMessages),
+  route("GET", "messages", true, handleFetchMessages),
+  route("POST", "messages/ack", true, handleAckMessages),
 ];
 
 export async function handleRequest(request: Request, env: Env): Promise<Response> {

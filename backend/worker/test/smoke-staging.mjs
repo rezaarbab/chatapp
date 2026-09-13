@@ -6,6 +6,10 @@
  * discarded. Tokens are never printed. Covers the full auth lifecycle:
  * register → token → use → re-auth → add_device → revoke → invalidation →
  * real token expiry (staging TTL) → duplicate-username anti-enumeration shape.
+ * Phase 3 adds the messaging lifecycle (discovery → fan-out → receive → ACK →
+ * delete → retry/idempotency) and REAL-D1 concurrency races (distinct seqs
+ * under concurrent sends; single stored row for concurrent same-logical sends).
+ * Message bodies are random test bytes and are never printed to the log.
  */
 
 const BASE = (process.env.STAGING_URL || "").replace(/\/+$/, "");
@@ -394,6 +398,144 @@ async function main() {
     "token really expires on Cloudflare (401 TOKEN_EXPIRED)",
     meExpired.status === 401 && meExpired.body.error.code === "TOKEN_EXPIRED",
   );
+
+  // 10) Phase 3 — messaging lifecycle + REAL-D1 race tests
+  // Fresh tokens first (staging TTL is short and token1 just expired).
+  // No ciphertext is ever printed: inbox responses are only checked, never stepLogged.
+  if (!accB) {
+    fail("phase 3 messaging section", "account B unavailable");
+  } else {
+    const mk = (n) => b64(crypto.getRandomValues(new Uint8Array(n)));
+    const reauth = async (deviceInfo, ip) => {
+      const ch = await http("POST", "/auth/challenge", { body: { purpose: "auth", device_id: deviceInfo.device_id }, ip });
+      const ctx = buildContext("auth", {
+        challengeId: ch.body.challenge_id,
+        nonce: ch.body.nonce,
+        accountId: deviceInfo.account_id,
+        deviceId: deviceInfo.device_id,
+      });
+      const sig = await signB64(deviceInfo.authPriv, ctx);
+      const v = await http("POST", "/auth/verify", { body: { challenge_id: ch.body.challenge_id, signature: sig }, ip });
+      return v.status === 200 ? v.body.token : null;
+    };
+    const tokA = await reauth({ account_id: reg.body.account_id, device_id: device1, authPriv: priv1 }, "203.0.113.10");
+    const tokB = await reauth(accB, "203.0.113.11");
+    check("p3: fresh tokens for both devices", !!tokA && !!tokB);
+
+    // discovery
+    const disc = await http("GET", `/accounts/${accB.account_id}/devices`, { token: tokA, ip: "203.0.113.10" });
+    check(
+      "p3: device discovery lists B's active device",
+      disc.status === 200 && (disc.body.devices || []).some((d) => d.device_id === accB.device_id),
+    );
+
+    // fan-out (peer + self sync) + idempotent retry
+    const logical1 = crypto.randomUUID();
+    const sendBody = {
+      logical_msg_id: logical1,
+      targets: [
+        { device_id: accB.device_id, ciphertext_b64: mk(1024) },
+        { device_id: device1, ciphertext_b64: mk(512) },
+      ],
+    };
+    const send1 = await http("POST", "/messages", { token: tokA, ip: "203.0.113.10", body: sendBody });
+    check("p3: fan-out queued (peer + self sync)", send1.status === 200 && (send1.body.results || []).every((r) => r.status === "queued"));
+    const retry1 = await http("POST", "/messages", { token: tokA, ip: "203.0.113.10", body: sendBody });
+    check(
+      "p3: idempotent retry → duplicate for every target",
+      retry1.status === 200 && (retry1.body.results || []).every((r) => r.status === "duplicate"),
+    );
+    const rej = await http("POST", "/messages", {
+      token: tokA,
+      ip: "203.0.113.10",
+      body: { logical_msg_id: crypto.randomUUID(), targets: [{ device_id: "00000000-0000-4000-8000-00000000dead", ciphertext_b64: mk(16) }] },
+    });
+    check("p3: unknown target rejected per-target", rej.status === 200 && rej.body.results?.[0]?.status === "rejected");
+
+    // receive + redelivery + ciphertext roundtrip (bodies never printed)
+    const inbox1 = await http("GET", "/messages", { token: tokB, ip: "203.0.113.11" });
+    const rows = inbox1.body.messages || [];
+    const rowB = rows.find((r) => r.logical_msg_id === logical1);
+    check(
+      "p3: inbox row carries sender address + seq",
+      rows.length >= 1 && !!rowB && rowB.sender_account_id === reg.body.account_id && rowB.sender_dev_no === 1 && rowB.seq === 1,
+    );
+    check("p3: ciphertext byte-exact roundtrip", !!rowB && Buffer.from(rowB.ciphertext, "base64").length === 1024);
+    const inbox2 = await http("GET", "/messages", { token: tokB, ip: "203.0.113.11" });
+    check("p3: delivered rows redelivered until ACK", (inbox2.body.messages || []).some((r) => r.delivery_id === rowB?.delivery_id));
+
+    // ACK scoping + delete
+    const foreignAck = await http("POST", "/messages/ack", { token: tokA, ip: "203.0.113.10", body: { delivery_ids: [rowB.delivery_id] } });
+    check("p3: foreign ACK deletes nothing", foreignAck.status === 200 && foreignAck.body.deleted === 0);
+    const ack1 = await http("POST", "/messages/ack", {
+      token: tokB,
+      ip: "203.0.113.11",
+      body: { delivery_ids: rows.map((r) => r.delivery_id) },
+    });
+    check("p3: own ACK deletes rows", ack1.status === 200 && ack1.body.deleted >= 1);
+    const inbox3 = await http("GET", "/messages", { token: tokB, ip: "203.0.113.11" });
+    check("p3: inbox empty after full ACK", (inbox3.body.messages || []).length === 0);
+
+    // seq never reused after ACK
+    const maxSeqBefore = rowB.seq;
+    const logical2 = crypto.randomUUID();
+    const seqSend = await http("POST", "/messages", {
+      token: tokA,
+      ip: "203.0.113.10",
+      body: { logical_msg_id: logical2, targets: [{ device_id: accB.device_id, ciphertext_b64: mk(64) }] },
+    });
+    check("p3: post-ACK send queued", seqSend.status === 200);
+    const inbox4 = await http("GET", "/messages", { token: tokB, ip: "203.0.113.11" });
+    const seqRow = (inbox4.body.messages || []).find((r) => r.logical_msg_id === logical2);
+    check("p3: seq strictly greater after ACK (never reused)", !!seqRow && seqRow.seq > maxSeqBefore, `seq=${seqRow && seqRow.seq}`);
+    await http("POST", "/messages/ack", {
+      token: tokB,
+      ip: "203.0.113.11",
+      body: { delivery_ids: (inbox4.body.messages || []).map((r) => r.delivery_id) },
+    });
+
+    // RACE 1: concurrent distinct sends to ONE recipient — distinct seqs on real D1
+    const RACE_N = 10;
+    const raceSends = await Promise.all(
+      Array.from({ length: RACE_N }, () =>
+        http("POST", "/messages", {
+          token: tokA,
+          ip: "203.0.113.10",
+          body: { logical_msg_id: crypto.randomUUID(), targets: [{ device_id: accB.device_id, ciphertext_b64: mk(128) }] },
+        }),
+      ),
+    );
+    check("p3-race: all concurrent sends accepted", raceSends.every((r) => r.status === 200), `statuses=${JSON.stringify(raceSends.map((r) => r.status))}`);
+    const raceInbox = await http("GET", "/messages?limit=200", { token: tokB, ip: "203.0.113.11" });
+    const raceRows = raceInbox.body.messages || [];
+    const raceSeqs = raceRows.map((r) => r.seq);
+    check("p3-race: exactly RACE_N rows delivered", raceRows.length === RACE_N, `got ${raceRows.length}`);
+    check("p3-race: all seqs DISTINCT (no duplicate under concurrency)", new Set(raceSeqs).size === raceSeqs.length, `seqs=${JSON.stringify(raceSeqs)}`);
+    check(
+      "p3-race: all seqs strictly above pre-race max (no reuse)",
+      raceSeqs.length === RACE_N && Math.min(...raceSeqs) > maxSeqBefore,
+      `min=${raceSeqs.length ? Math.min(...raceSeqs) : "?"} maxBefore=${maxSeqBefore}`,
+    );
+
+    // RACE 2: concurrent sends with the SAME logical id — exactly one stored row
+    const dupLogical = crypto.randomUUID();
+    const dupSends = await Promise.all(
+      Array.from({ length: 5 }, () =>
+        http("POST", "/messages", {
+          token: tokA,
+          ip: "203.0.113.10",
+          body: { logical_msg_id: dupLogical, targets: [{ device_id: accB.device_id, ciphertext_b64: mk(128) }] },
+        }),
+      ),
+    );
+    check("p3-race2: all concurrent same-logical sends answered 200", dupSends.every((r) => r.status === 200), `statuses=${JSON.stringify(dupSends.map((r) => r.status))}`);
+    const queuedCount = dupSends.filter((r) => r.body?.results?.[0]?.status === "queued").length;
+    const dupCountResults = dupSends.filter((r) => r.body?.results?.[0]?.status === "duplicate").length;
+    check("p3-race2: exactly one 'queued' result, rest 'duplicate'", queuedCount === 1 && dupCountResults === RACE_N - 1, `queued=${queuedCount} dup=${dupCountResults}`);
+    const dupInbox = await http("GET", "/messages?limit=200", { token: tokB, ip: "203.0.113.11" });
+    const storedForLogical = (dupInbox.body.messages || []).filter((r) => r.logical_msg_id === dupLogical).length;
+    check("p3-race2: exactly ONE stored row for the logical id", storedForLogical === 1, `stored=${storedForLogical}`);
+  }
 
   if (failures > 0) {
     console.error(`[SUMMARY] ${failures} SMOKE TEST(S) FAILED`);
