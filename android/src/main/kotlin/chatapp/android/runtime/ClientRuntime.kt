@@ -48,6 +48,13 @@ class ClientRuntime internal constructor(
                 messaging = Messaging(apiClient, dbStore),
             )
         }
+        /**
+         * JVM-test factory (design §13): builds an empty runtime whose members
+         * are null. Tests that never touch the network collaborators can build a
+         * repository subclass around it. Production code never calls this.
+         */
+        @JvmStatic
+        fun forJvmTest(): ClientRuntime = ClientRuntime(null, null, null, null, null)
     }
 
     fun close() = store?.close()
