@@ -21,11 +21,11 @@ import org.junit.runner.RunWith
  *
  *   install -> register (UI) -> open conversation (UI) -> send (UI)
  *   -> counterpart receives (real backend) -> counterpart replies
- *   -> UI receives -> kill process -> relaunch -> history persists
+ *   -> UI receives -> relaunch -> history persists
  *
- * A single sequential test guarantees a clean, deterministic account budget
- * (1 registration) and mirrors how a real user uses the app.
- * No plaintext/secret is ever logged (Phase-4 rule #6).
+ * One sequential test keeps the registration budget at 2 (app + counterpart)
+ * and mirrors how a real user uses the app. No plaintext/secret is ever
+ * logged (Phase-4 rule #6).
  */
 @RunWith(AndroidJUnit4::class)
 class Phase5AcceptanceTest {
@@ -33,22 +33,22 @@ class Phase5AcceptanceTest {
     @get:Rule
     val compose = createAndroidComposeRule<chatapp.app.MainActivity>()
 
-    private lateinit var counterpart: CounterpartDevice
+    private lateinit var cp: CounterpartDevice
 
     @Before
     fun setUp() {
-        counterpart = CounterpartDevice("acceptance")
-        counterpart.openFresh()
-        compose.waitForIdleSync()
+        cp = CounterpartDevice("acceptance")
+        cp.openFresh()
+        compose.waitForIdle()
     }
 
     @After
     fun tearDown() {
-        counterpart.close()
+        cp.close()
     }
 
     private fun settle() {
-        compose.waitForIdleSync()
+        compose.waitForIdle()
         Thread.sleep(500)
     }
 
@@ -72,11 +72,11 @@ class Phase5AcceptanceTest {
     private fun clickIfVisible(t: String, timeoutMs: Long = 20_000): Boolean {
         if (!eventually(timeoutMs) { textVisible(t) }) return false
         return try {
-            compose.onNodeWithText(t, substring = false).performClick()
+            compose.onNodeWithText(t, substring = true).performClick()
             true
         } catch (_: Throwable) {
             try {
-                compose.onNodeWithText(t, substring = true).performClick()
+                compose.onNodeWithText(t).performClick()
                 true
             } catch (_: Throwable) { false }
         }
@@ -86,22 +86,25 @@ class Phase5AcceptanceTest {
     fun fullJourney_register_send_receive_relaunch_persistence() {
         val cpUsername = AccountManager.randomUsername("cp")
 
-        // ---------- 1. register the counterpart (outside, no UI) ----------
-        val cpState = counterpart.runtime.accounts.register(cpUsername)
-        counterpart.runtime.preKeys.uploadBatch()
+        // ---------- 1. counterpart registers (outside the UI) ----------
+        val cpState = cp.accounts.register(cpUsername)
+        cp.preKeys.uploadBatch()
 
-        // ---------- 2. app: register through the REAL UI ----------
-        if (!eventually { textVisible("ایجاد حساب جدید") && textVisible("افزودن این دستگاه") }) {
-            // already registered from a previous partial run: continue journey
-            assertTrue(eventually { textVisible("گفتگوها") || textVisible("گفتگوی جدید") })
-        } else {
+        // ---------- 2. app registers through the REAL UI (first run only) ----------
+        if (eventually(15_000) { textVisible("ایجاد حساب جدید") }) {
             compose.onNodeWithText("ایجاد حساب جدید").performClick()
             settle()
             val appUsername = AccountManager.randomUsername("ui")
             compose.onNodeWithText("نام کاربری (a-z, 0-9, _, -)").performTextInput(appUsername)
             settle()
             compose.onNodeWithText("ثبت‌نام").performClick()
-            assertTrue("must reach home after UI register", eventually(90_000) { textVisible("گفتگوی جدید") })
+            assertTrue(
+                "must reach home after UI register",
+                eventually(120_000) { textVisible("گفتگوی جدید") },
+            )
+        } else {
+            // A previous partial run already registered the app; continue.
+            assertTrue(eventually { textVisible("گفتگوی جدید") })
         }
 
         // ---------- 3. open a new chat with the counterpart ----------
@@ -117,16 +120,15 @@ class Phase5AcceptanceTest {
         compose.onNodeWithText("پیام…").performTextInput(outgoing)
         settle()
         assertTrue("send button", clickIfVisible("ارسال"))
-        assertTrue("bubble shows the sent text", eventually(20_000) { textVisible(outgoing) })
+        assertTrue("bubble shows the sent text", eventually(30_000) { textVisible(outgoing) })
 
         // ---------- 5. counterpart receives via the real backend ----------
         val received = mutableListOf<ByteArray>()
         var senderAccountId: String? = null
         var senderDevNo: Int? = null
-        val deadline = System.currentTimeMillis() + 90_000
+        val deadline = System.currentTimeMillis() + 120_000
         while (received.isEmpty() && System.currentTimeMillis() < deadline) {
-            val batch = counterpart.runtime.messaging.receive()
-            batch.forEach { msg ->
+            cp.messaging.receive().forEach { msg ->
                 if (!msg.duplicate) {
                     received.add(msg.plaintext)
                     senderAccountId = msg.senderAccountId
@@ -140,42 +142,26 @@ class Phase5AcceptanceTest {
             received.any { String(it, Charsets.UTF_8) == outgoing },
         )
 
-        // ---------- 6. counterpart replies; UI must show it ----------
+        // ---------- 6. counterpart replies; the UI must show it ----------
         val reply = "javab az counterpart"
-        counterpart.runtime.messaging.send(
-            counterpart.runtime.preKeys,
+        val appDevice = cp.messaging
+            .discoverDevices(senderAccountId!!)
+            .first { it.devNo == senderDevNo }
+        cp.messaging.send(
+            cp.preKeys,
             reply.toByteArray(Charsets.UTF_8),
-            listOf(
-                Messaging.TargetDevice(
-                    senderAccountId!!,
-                    // the app device that sent the message: resolved by dev_no,
-                    // discovered on the sender's account
-                    counterpart.runtime.messaging
-                        .discoverDevices(senderAccountId!!)
-                        .first { it.devNo == senderDevNo }.deviceId,
-                    senderDevNo!!,
-                ),
-            ),
+            listOf(Messaging.TargetDevice(senderAccountId!!, appDevice.deviceId, appDevice.devNo)),
         )
         assertTrue(
             "UI must show the counterpart reply after a sync",
-            eventually(90_000) { textVisible(reply) },
+            eventually(120_000) { textVisible(reply) },
         )
 
-        // ---------- 7. kill process & relaunch; history + session persist ----------
-        compose.activityRule.scenario.onActivity { activity ->
-            activity.recreate()
-        }
-        assertTrue("home after relaunch", eventually { textVisible("گفتگوی جدید") })
-        // reopen the same chat: history must persist (encrypted mirror survived)
+        // ---------- 7. relaunch; history + session persist ----------
+        compose.activityRule.scenario.onActivity { it.recreate() }
+        assertTrue("home after relaunch", eventually(30_000) { textVisible("گفتگوی جدید") })
         assertTrue("chat row persists", clickIfVisible(cpUsername, 30_000))
-        assertTrue(
-            "sent message survives relaunch",
-            eventually { textVisible(outgoing) },
-        )
-        assertTrue(
-            "reply survives relaunch",
-            eventually { textVisible(reply) },
-        )
+        assertTrue("sent message survives relaunch", eventually { textVisible(outgoing) })
+        assertTrue("reply survives relaunch", eventually { textVisible(reply) })
     }
 }

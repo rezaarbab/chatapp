@@ -79,5 +79,11 @@ dependencies {
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test:runner:1.6.2")
     androidTestImplementation("junit:junit:4.13.2")
+    // e2e counterpart drives the REAL protocol stack (libsignal/Tink surface)
+    androidTestImplementation(project(":android"))
+    androidTestImplementation("org.signal:libsignal-android:0.102.1")
+    androidTestImplementation("com.google.crypto.tink:tink-android:1.23.0")
+    androidTestImplementation("net.zetetic:sqlcipher-android:4.17.0")
+    androidTestImplementation("androidx.sqlite:sqlite:2.7.0")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
 }
