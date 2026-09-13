@@ -56,6 +56,6 @@ class CounterpartDevice(val label: String) {
     }
 
     fun close() {
-        if (this::store.isInitialized && store.isOpen) store.close()
+        if (this::store.isInitialized && store.isOpen()) store.close()
     }
 }
